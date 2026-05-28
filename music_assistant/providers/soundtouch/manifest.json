@@ -1,0 +1,14 @@
+{
+  "type": "player",
+  "domain": "soundtouch",
+  "stage": "experimental",
+  "name": "Bose SoundTouch",
+  "description": "Control Bose SoundTouch speakers locally through the SoundTouch Webservices API.",
+  "codeowners": ["@music-assistant"],
+  "credits": [
+    "[bosesoundtouchapi](https://github.com/thlucas1/bosesoundtouchapi)"
+  ],
+  "requirements": ["bosesoundtouchapi==1.0.87"],
+  "documentation": "https://github.com/music-assistant/server/tree/dev/music_assistant/providers/soundtouch",
+  "mdns_discovery": ["_soundtouch._tcp.local."]
+}
