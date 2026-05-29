@@ -34,10 +34,17 @@ def _load_get_now_selection_preset_slot() -> Any:
         sys.modules[full_name] = module
         spec.loader.exec_module(module)
 
-    return sys.modules["music_assistant.providers.soundtouch.models"].get_now_selection_preset_slot
+    models = sys.modules["music_assistant.providers.soundtouch.models"]
+    return (
+        models.get_now_selection_preset_slot,
+        models.iter_websocket_events,
+        models.parse_websocket_xml,
+    )
 
 
-get_now_selection_preset_slot = _load_get_now_selection_preset_slot()
+get_now_selection_preset_slot, iter_websocket_events, parse_websocket_xml = (
+    _load_get_now_selection_preset_slot()
+)
 
 
 def test_get_now_selection_preset_slot() -> None:
@@ -62,3 +69,33 @@ def test_get_now_selection_preset_slot_invalid_id() -> None:
     event = ElementTree.fromstring('<nowSelectionUpdated><preset id="bad" /></nowSelectionUpdated>')
 
     assert get_now_selection_preset_slot(event) is None
+
+
+def test_parse_websocket_xml_returns_event() -> None:
+    """Parse raw SoundTouch websocket XML safely."""
+    event = parse_websocket_xml(
+        '<nowSelectionUpdated><preset id="5"><ContentItem source="TUNEIN" /></preset>'
+        "</nowSelectionUpdated>"
+    )
+
+    assert event is not None
+    assert get_now_selection_preset_slot(event) == 5
+
+
+def test_parse_websocket_xml_rejects_invalid_xml() -> None:
+    """Return None for malformed websocket payloads."""
+    assert parse_websocket_xml("<nowSelectionUpdated>") is None
+
+
+def test_iter_websocket_events_includes_wrapped_children() -> None:
+    """Return child event nodes when a websocket payload wraps multiple events."""
+    event = ElementTree.fromstring(
+        "<updates>"
+        '<volumeUpdated><volume actual="20" /></volumeUpdated>'
+        '<nowSelectionUpdated><preset id="4" /></nowSelectionUpdated>'
+        "</updates>"
+    )
+
+    event_names = [child.tag for child in iter_websocket_events(event)]
+
+    assert event_names == ["updates", "volumeUpdated", "nowSelectionUpdated"]

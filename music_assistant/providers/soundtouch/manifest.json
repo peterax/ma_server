@@ -8,7 +8,7 @@
   "credits": [
     "[bosesoundtouchapi](https://github.com/thlucas1/bosesoundtouchapi)"
   ],
-  "requirements": ["bosesoundtouchapi==1.0.87"],
+  "requirements": ["bosesoundtouchapi==1.0.87", "defusedxml==0.7.1"],
   "documentation": "https://github.com/music-assistant/server/tree/dev/music_assistant/providers/soundtouch",
   "mdns_discovery": ["_soundtouch._tcp.local."]
 }

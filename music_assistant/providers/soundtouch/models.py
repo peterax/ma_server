@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from defusedxml import ElementTree
+
 from .constants import DEFAULT_SOUNDTOUCH_DLNA_PORT, DEFAULT_SOUNDTOUCH_PORT
 
 
@@ -34,3 +36,16 @@ def get_now_selection_preset_slot(event: Any) -> int | None:
         return int(preset_id)
     except ValueError:
         return None
+
+
+def parse_websocket_xml(raw_message: str) -> ElementTree.Element | None:
+    """Safely parse a raw SoundTouch websocket XML message."""
+    try:
+        return ElementTree.fromstring(raw_message)
+    except ElementTree.ParseError:
+        return None
+
+
+def iter_websocket_events(event: ElementTree.Element) -> list[ElementTree.Element]:
+    """Return the root and descendants that represent SoundTouch event nodes."""
+    return [event, *list(event)]

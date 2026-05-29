@@ -7,9 +7,9 @@ import time
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from bosesoundtouchapi.soundtouchnotifycategorys import SoundTouchNotifyCategorys
-from bosesoundtouchapi.ws import SoundTouchWebSocket
-from music_assistant_models.enums import IdentifierType, MediaType, PlaybackState
+from aiohttp import ClientError, WSMsgType
+from music_assistant_models.config_entries import ConfigEntry, ConfigValueOption
+from music_assistant_models.enums import ConfigEntryType, IdentifierType, MediaType, PlaybackState
 from music_assistant_models.errors import PlayerCommandFailed
 
 from music_assistant.constants import CONF_PLAYERS
@@ -17,7 +17,9 @@ from music_assistant.models.player import DeviceInfo, Player, PlayerMedia, Playe
 
 from .constants import (
     CONF_LOCAL_PRESETS,
+    DEFAULT_SOUNDTOUCH_WEBSOCKET_PORT,
     IDLE_POLL_INTERVAL,
+    LOCAL_PRESET_CONFIG_PREFIX,
     LOCAL_PRESET_PLAY_PREFIX,
     LOCAL_PRESET_SAVE_PREFIX,
     PASSIVE_SOURCE_NAMES,
@@ -25,11 +27,16 @@ from .constants import (
     PLAYBACK_STATE_MAP,
     PLAYER_FEATURES,
 )
-from .models import SoundTouchDiscoveryInfo, get_now_selection_preset_slot
+from .models import (
+    SoundTouchDiscoveryInfo,
+    get_now_selection_preset_slot,
+    iter_websocket_events,
+    parse_websocket_xml,
+)
 
 if TYPE_CHECKING:
     from bosesoundtouchapi import SoundTouchClient
-    from music_assistant_models.config_entries import ConfigEntry, ConfigValueType
+    from music_assistant_models.config_entries import ConfigValueType
 
     from .provider import SoundTouchPlayerProvider
 
@@ -57,7 +64,7 @@ class SoundTouchPlayer(Player):
         self._last_bose_preset_signatures: dict[int, str] = {}
         self._websocket_refresh_pending = False
         self._websocket_stopping = False
-        self._websocket: SoundTouchWebSocket | None = None
+        self._websocket_task: asyncio.Task[None] | None = None
         self._attr_device_info = DeviceInfo(
             model=discovery_info.model or "SoundTouch",
             manufacturer="Bose",
@@ -76,6 +83,11 @@ class SoundTouchPlayer(Player):
         await self.mass.players.register_or_update(self)
         self._start_websocket()
 
+    async def on_config_updated(self) -> None:
+        """Refresh player state when local preset config changes."""
+        await self._sync_local_preset_names()
+        await self.update_attributes()
+
     async def update_discovery_info(self, discovery_info: SoundTouchDiscoveryInfo) -> None:
         """Update connection metadata from a new discovery event."""
         previous_host = self.discovery_info.host
@@ -84,13 +96,13 @@ class SoundTouchPlayer(Player):
         self._attr_available = True
         await self.update_attributes()
         if discovery_info.host != previous_host:
-            self._stop_websocket()
+            await self._stop_websocket()
             self._start_websocket()
 
     async def close(self) -> None:
         """Close background resources for the player."""
         self._websocket_stopping = True
-        self._stop_websocket()
+        await self._stop_websocket()
 
     async def get_config_entries(
         self,
@@ -98,7 +110,26 @@ class SoundTouchPlayer(Player):
         values: dict[str, ConfigValueType] | None = None,
     ) -> list[ConfigEntry]:
         """Return provider/player specific config entries."""
-        return []
+        base_entries = await super().get_config_entries(action=action, values=values)
+        preset_options = await self._get_local_preset_options()
+        local_presets = self._get_local_presets()
+        entries = [
+            ConfigEntry(
+                key=f"{LOCAL_PRESET_CONFIG_PREFIX}{slot}",
+                type=ConfigEntryType.STRING,
+                label=f"SoundTouch favorite {slot}",
+                description=(
+                    "Assign Music Assistant media to this SoundTouch preset button. "
+                    "Choose a library playlist/radio item or paste any playable MA URI."
+                ),
+                category="presets",
+                required=False,
+                default_value=local_presets.get(str(slot), {}).get("uri", ""),
+                options=preset_options,
+            )
+            for slot in range(1, 7)
+        ]
+        return [*base_entries, *entries]
 
     async def power(self, powered: bool) -> None:
         """Send a POWER command to the player."""
@@ -222,83 +253,74 @@ class SoundTouchPlayer(Player):
 
     def _start_websocket(self) -> None:
         """Start SoundTouch websocket notifications."""
-        if self._websocket_stopping or self._websocket is not None:
+        if (
+            self._websocket_stopping
+            or (self._websocket_task is not None and not self._websocket_task.done())
+        ):
             return
-        try:
-            self._websocket = SoundTouchWebSocket(self.client)
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.nowSelectionUpdated,
-                self._on_websocket_now_selection_updated,
-            )
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.presetsUpdated,
-                self._on_websocket_state_updated,
-            )
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.nowPlayingUpdated,
-                self._on_websocket_state_updated,
-            )
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.volumeUpdated,
-                self._on_websocket_state_updated,
-            )
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.WebSocketError,
-                self._on_websocket_error,
-            )
-            self._websocket.AddListener(
-                SoundTouchNotifyCategorys.WebSocketClose,
-                self._on_websocket_closed,
-            )
-            self._websocket.StartNotification()
-            self.logger.debug("Started SoundTouch websocket listener for %s", self.name)
-        except Exception as err:
-            self.logger.debug("Could not start SoundTouch websocket for %s: %s", self.name, err)
-            self._websocket = None
+        self._websocket_task = self.mass.create_task(self._websocket_loop())
+        self.logger.debug("Started SoundTouch websocket listener for %s", self.name)
 
     def _ensure_websocket_running(self) -> None:
-        """Restart SoundTouch websocket notifications if the thread stopped."""
-        if self._websocket is None:
-            self._start_websocket()
-            return
-        if not self._websocket.IsThreadRunForeverActive:
+        """Restart SoundTouch websocket notifications if the task stopped."""
+        if self._websocket_task is None or self._websocket_task.done():
             self.logger.debug("Restarting stopped SoundTouch websocket for %s", self.name)
-            self._stop_websocket()
             self._start_websocket()
 
-    def _stop_websocket(self) -> None:
+    async def _stop_websocket(self) -> None:
         """Stop SoundTouch websocket notifications."""
-        if self._websocket is None:
+        if self._websocket_task is None:
             return
-        with suppress(Exception):
-            self._websocket.StopNotification()
-            self._websocket.ClearListeners()
-        self._websocket = None
+        self._websocket_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._websocket_task
+        self._websocket_task = None
 
-    def _on_websocket_now_selection_updated(self, _client: SoundTouchClient, event: Any) -> None:
-        """Handle SoundTouch now-selection websocket events from the websocket thread."""
-        if (slot := get_now_selection_preset_slot(event)) is None:
-            return
-        self.mass.loop.call_soon_threadsafe(
-            self.mass.create_task,
-            self._handle_websocket_preset_selection(slot),
+    async def _websocket_loop(self) -> None:
+        """Listen for raw SoundTouch websocket XML events."""
+        websocket_url = (
+            f"ws://{self.discovery_info.host}:{DEFAULT_SOUNDTOUCH_WEBSOCKET_PORT}/"
         )
+        while not self._websocket_stopping:
+            try:
+                async with self.mass.http_session_no_ssl.ws_connect(
+                    websocket_url,
+                    protocols=("gabbo",),
+                    heartbeat=30,
+                ) as websocket:
+                    async for message in websocket:
+                        if message.type == WSMsgType.TEXT:
+                            await self._handle_websocket_message(message.data)
+                        elif message.type == WSMsgType.ERROR:
+                            self.logger.debug(
+                                "SoundTouch websocket error for %s: %s",
+                                self.name,
+                                websocket.exception(),
+                            )
+                            break
+            except asyncio.CancelledError:
+                raise
+            except (ClientError, TimeoutError, OSError) as err:
+                self.logger.debug("SoundTouch websocket failed for %s: %s", self.name, err)
+            if not self._websocket_stopping:
+                await asyncio.sleep(5)
 
-    def _on_websocket_state_updated(self, _client: SoundTouchClient, _event: Any) -> None:
-        """Schedule a state refresh from websocket status notifications."""
-        self.mass.loop.call_soon_threadsafe(self._queue_websocket_state_refresh)
-
-    def _on_websocket_error(self, _client: SoundTouchClient, event: Any) -> None:
-        """Handle SoundTouch websocket errors."""
-        self.logger.debug("SoundTouch websocket error for %s: %s", self.name, event)
-
-    def _on_websocket_closed(self, _client: SoundTouchClient, _event: Any) -> None:
-        """Handle SoundTouch websocket close notifications."""
-        if self._websocket_stopping:
+    async def _handle_websocket_message(self, raw_message: str) -> None:
+        """Handle a raw SoundTouch websocket XML message."""
+        event = parse_websocket_xml(raw_message)
+        if event is None:
             return
-        self.mass.loop.call_soon_threadsafe(
-            self.mass.create_task, self._restart_websocket_after_delay()
-        )
+        refresh_needed = False
+        for child_event in iter_websocket_events(event):
+            event_name = child_event.tag.rsplit("}", 1)[-1]
+            if event_name == "nowSelectionUpdated":
+                if (slot := get_now_selection_preset_slot(child_event)) is not None:
+                    await self._handle_websocket_preset_selection(slot)
+                refresh_needed = True
+            elif event_name in {"presetsUpdated", "nowPlayingUpdated", "volumeUpdated"}:
+                refresh_needed = True
+        if refresh_needed:
+            self._queue_websocket_state_refresh()
 
     def _queue_websocket_state_refresh(self) -> None:
         """Debounce SoundTouch websocket state refreshes on the event loop."""
@@ -320,7 +342,7 @@ class SoundTouchPlayer(Player):
         """Restart websocket notifications after a close event."""
         if self._websocket_stopping:
             return
-        self._stop_websocket()
+        await self._stop_websocket()
         await asyncio.sleep(5)
         self._start_websocket()
 
@@ -546,6 +568,10 @@ class SoundTouchPlayer(Player):
             f"{CONF_PLAYERS}/{self.player_id}/values/{CONF_LOCAL_PRESETS}",
             local_presets,
         )
+        self.mass.config.set(
+            f"{CONF_PLAYERS}/{self.player_id}/values/{LOCAL_PRESET_CONFIG_PREFIX}{slot}",
+            media_uri,
+        )
         if trigger_state_update:
             await self.update_attributes()
 
@@ -575,7 +601,69 @@ class SoundTouchPlayer(Player):
             CONF_LOCAL_PRESETS,
             {},
         )
-        return dict(raw_presets) if isinstance(raw_presets, dict) else {}
+        local_presets = dict(raw_presets) if isinstance(raw_presets, dict) else {}
+        for slot in range(1, 7):
+            slot_key = str(slot)
+            uri = self.mass.config.get(
+                f"{CONF_PLAYERS}/{self.player_id}/values/{LOCAL_PRESET_CONFIG_PREFIX}{slot}"
+            )
+            if uri is None:
+                continue
+            if uri:
+                existing = local_presets.get(slot_key, {})
+                local_presets[slot_key] = {
+                    "uri": str(uri),
+                    "name": existing.get("name") or str(uri),
+                    "image_url": existing.get("image_url"),
+                }
+            else:
+                local_presets.pop(slot_key, None)
+        return local_presets
+
+    async def _get_local_preset_options(self) -> list[ConfigValueOption]:
+        """Return selectable Music Assistant media options for local preset config."""
+        options_by_uri: dict[str, str] = {}
+        for preset in self._get_local_presets().values():
+            if uri := preset.get("uri"):
+                options_by_uri[uri] = preset.get("name") or uri
+
+        async for playlist in self.mass.music.playlists.iter_library_items(True):
+            options_by_uri[playlist.uri] = playlist.name
+        async for radio in self.mass.music.radio.iter_library_items(True):
+            options_by_uri[radio.uri] = radio.name
+
+        return [
+            ConfigValueOption(title, uri)
+            for uri, title in sorted(options_by_uri.items(), key=lambda item: item[1].lower())
+        ]
+
+    async def _sync_local_preset_names(self) -> None:
+        """Persist friendly names for directly configured local presets."""
+        local_presets = self._get_local_presets()
+        if not local_presets:
+            return
+
+        names_by_uri: dict[str, str] = {}
+        async for playlist in self.mass.music.playlists.iter_library_items(True):
+            names_by_uri[playlist.uri] = playlist.name
+        async for radio in self.mass.music.radio.iter_library_items(True):
+            names_by_uri[radio.uri] = radio.name
+
+        updated = False
+        for preset in local_presets.values():
+            uri = preset.get("uri")
+            if not uri:
+                continue
+            name = names_by_uri.get(uri, uri)
+            if preset.get("name") != name:
+                preset["name"] = name
+                updated = True
+
+        if updated:
+            self.mass.config.set(
+                f"{CONF_PLAYERS}/{self.player_id}/values/{CONF_LOCAL_PRESETS}",
+                local_presets,
+            )
 
     def _get_active_bose_preset_slot(self, status: Any, presets: Any) -> int | None:
         """Return Bose preset slot if current native status matches a Bose preset."""
