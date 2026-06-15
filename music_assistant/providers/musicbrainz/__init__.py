@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any, cast
 from mashumaro import DataClassDictMixin
 from mashumaro.exceptions import MissingField
 from music_assistant_models.enums import ExternalID, LinkType, ProviderFeature
-from music_assistant_models.errors import InvalidDataError, ResourceTemporarilyUnavailable
+from music_assistant_models.errors import (
+    InvalidDataError,
+    RateLimited,
+    ResourceTemporarilyUnavailable,
+)
 from music_assistant_models.media_items import MediaItemLink, MediaItemMetadata
 
 from music_assistant.controllers.cache import use_cache
@@ -271,7 +275,7 @@ class MusicBrainzRecording(DataClassDictMixin):
 class MusicbrainzProvider(MetadataProvider):
     """The Musicbrainz Metadata provider."""
 
-    throttler = ThrottlerManager(rate_limit=5, period=1)
+    throttler = ThrottlerManager(rate_limit=10, period=10)
 
     async def handle_async_init(self) -> None:
         """Handle async initialization of the provider."""
@@ -425,13 +429,24 @@ class MusicbrainzProvider(MetadataProvider):
         msg = "Invalid MusicBrainz recording ID provided"
         raise InvalidDataError(msg)
 
+    @use_cache(86400 * 30)
     async def get_isrcs_for_recording(self, recording_id: str) -> list[str]:
         """
         Get ISRCs for a MusicBrainz Recording ID.
 
-        :param recording_id: MusicBrainz recording ID.
-        :return: List of ISRCs, or empty list if not found or on error.
+        :param recording_id: MusicBrainz recording ID, or a track ID as
+            handed out by e.g. Last.fm.
+        :return: List of ISRCs, or empty list if not found.
         """
+        # the search response includes the ISRCs, so either ID kind costs one call
+        safe_id = re.sub(LUCENE_SPECIAL, r"\\\1", recording_id)
+        query = f"rid:{safe_id} OR tid:{safe_id}"
+        if (result := await self.get_data("recording", query=query)) and (
+            recordings := result.get("recordings")
+        ):
+            return recordings[0].get("isrcs") or []
+        # merged (redirected) recording MBIDs are absent from the search
+        # index but still resolve via direct lookup
         with suppress(InvalidDataError):
             recording = await self.get_recording_details(recording_id)
             return recording.isrcs or []
@@ -689,7 +704,7 @@ class MusicbrainzProvider(MetadataProvider):
             # handle rate limiter
             if response.status == 429:
                 backoff_time = int(response.headers.get("Retry-After", 0))
-                raise ResourceTemporarilyUnavailable("Rate Limiter", backoff_time=backoff_time)
+                raise RateLimited("Rate Limiter", backoff_time=backoff_time)
             # handle temporary server error
             if response.status in (502, 503):
                 raise ResourceTemporarilyUnavailable(backoff_time=30)

@@ -67,6 +67,10 @@ from music_assistant.constants import (
     MASS_LOGGER_NAME,
     VERBOSE_LOG_LEVEL,
 )
+from music_assistant.controllers.streams.audio_analysis import (
+    LOUDNESS_ANALYSIS_DOMAIN,
+    SMART_FADES_ANALYSIS_DOMAIN,
+)
 from music_assistant.controllers.streams.audio_buffer import AudioBuffer
 from music_assistant.controllers.streams.constants import (
     CACHE_CATEGORY_RESOLVED_RADIO_URL,
@@ -141,6 +145,8 @@ class CrossfadeData:
     queue_item_id: str
     # Offset for the fade_in track's elapsed time calculation, to account for crossfade duration and trim
     elapsed_time_offset: float = 0.0
+    # Normalization mode the intro PCM was baked with, used to pin the next track's body to the same mode
+    normalization_mode: VolumeNormalizationMode | None = None
 
 
 def _snap_supported_rate_up(target: int, supported_sample_rates: list[int]) -> int:
@@ -425,7 +431,7 @@ class StreamsAudio:
         seek_position: int = 0,
         filter_params: list[str] | None = None,
         chunk_seconds: float = 1.0,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Get audio stream for given media details as raw PCM.
 
@@ -445,7 +451,7 @@ class StreamsAudio:
         extra_input_args = streamdetails.extra_input_args or []
 
         # work out audio source for these streamdetails
-        audio_source: str | AsyncGenerator[bytes, None]
+        audio_source: str | AsyncGenerator[bytes]
         stream_type = streamdetails.stream_type
         if stream_type == StreamType.CUSTOM:
             # MusicProvider and PluginProvider both expose get_audio_stream with the same shape
@@ -539,9 +545,14 @@ class StreamsAudio:
         cancelled = False
         first_chunk_received = False
         ffmpeg_loglevel = "debug" if self.logger.isEnabledFor(VERBOSE_LOG_LEVEL) else "info"
+        # When a provider hands us already-decoded audio (e.g. Spotify Connect /
+        # AirPlay receivers piping PCM after their own decode), audio_format is
+        # the original source format meant for display while decoded_audio_format
+        # is what ffmpeg actually needs to read off the wire.
+        ffmpeg_input_format = streamdetails.decoded_audio_format or streamdetails.audio_format
         ffmpeg_proc = FFMpeg(
             audio_input=audio_source,
-            input_format=streamdetails.audio_format,
+            input_format=ffmpeg_input_format,
             output_format=pcm_format,
             filter_params=filter_params,
             extra_input_args=extra_input_args,
@@ -575,10 +586,15 @@ class StreamsAudio:
                     # At this point ffmpeg has started and should now know the codec used
                     # for encoding the audio.
                     # Note: ffmpeg_proc.input_format is the same object as
-                    # streamdetails.audio_format, so sample_rate / bit_depth / bit_rate
+                    # ffmpeg_input_format, so sample_rate / bit_depth / bit_rate
                     # parsed from the ffmpeg log already live on streamdetails too.
                     first_chunk_received = True
-                    streamdetails.audio_format.codec_type = ffmpeg_proc.input_format.codec_type
+                    # Skip the codec_type writeback when the provider declared a
+                    # decoded format: audio_format already holds the authoritative
+                    # source codec and the probed value would just be the
+                    # post-decode wire format (e.g. PCM for Spotify Connect).
+                    if streamdetails.decoded_audio_format is None:
+                        streamdetails.audio_format.codec_type = ffmpeg_proc.input_format.codec_type
                     # Some providers omit (or report 0 for) the item duration; ffmpeg can
                     # usually probe it from the source. Only apply when missing so we
                     # don't clobber an accurate provider value with a rounded one.
@@ -768,7 +784,7 @@ class StreamsAudio:
 
     async def get_icy_radio_stream(
         self, url: str, streamdetails: StreamDetails
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Stream radio audio with ICY metadata support.
 
@@ -799,7 +815,7 @@ class StreamsAudio:
                 except asyncio.exceptions.IncompleteReadError:
                     break
 
-    async def get_reconnecting_radio_stream(self, url: str) -> AsyncGenerator[bytes, None]:
+    async def get_reconnecting_radio_stream(self, url: str) -> AsyncGenerator[bytes]:
         """
         Yield continuous radio stream data, automatically reconnecting on disconnect.
 
@@ -903,7 +919,7 @@ class StreamsAudio:
         streamdetails: StreamDetails,
         seek_position: int = 0,
         verify_ssl: bool = True,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """Get audio stream from HTTP."""
         mass = self.mass
         self.logger.debug(
@@ -971,7 +987,7 @@ class StreamsAudio:
         filename: str,
         streamdetails: StreamDetails,
         seek_position: int = 0,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """Get audio stream from local accessible file."""
         if seek_position:
             assert streamdetails.duration, "Duration required for seek requests"
@@ -1009,7 +1025,7 @@ class StreamsAudio:
         self,
         streamdetails: StreamDetails,
         seek_position: int = 0,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Return audio stream for a concatenation of multiple files.
 
@@ -1344,7 +1360,7 @@ class StreamsAudio:
         queue_item: QueueItem,
         pcm_format: AudioFormat,
         raise_on_error: bool = True,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Get the realtime PCM stream for an AudioSource queue item.
 
@@ -1402,7 +1418,7 @@ class StreamsAudio:
         self,
         streamdetails: StreamDetails,
         pcm_format: AudioFormat,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """Yield PCM for an AudioSource, bypassing ffmpeg when formats match."""
         if _pcm_formats_match(streamdetails.audio_format, pcm_format):
             source_gen = self._open_audio_source_generator(streamdetails)
@@ -1418,9 +1434,7 @@ class StreamsAudio:
         ):
             yield chunk
 
-    def _open_audio_source_generator(
-        self, streamdetails: StreamDetails
-    ) -> AsyncGenerator[bytes, None]:
+    def _open_audio_source_generator(self, streamdetails: StreamDetails) -> AsyncGenerator[bytes]:
         """Open the raw PCM generator for an AudioSource (CUSTOM or NAMED_PIPE)."""
         if streamdetails.stream_type == StreamType.CUSTOM:
             provider = self.mass.get_provider(streamdetails.provider)
@@ -1442,7 +1456,8 @@ class StreamsAudio:
         seek_position: int = 0,
         playback_speed: float = 1.0,
         raise_on_error: bool = True,
-    ) -> AsyncGenerator[bytes, None]:
+        normalization_override: VolumeNormalizationMode | None = None,
+    ) -> AsyncGenerator[bytes]:
         """
         Get the (PCM) audio stream for a single queue item.
 
@@ -1452,6 +1467,10 @@ class StreamsAudio:
 
         AudioSource items dispatch to ``get_audio_source_stream`` instead: they
         are realtime and bypass the buffering/normalization/filter machinery.
+
+        :param normalization_override: Force this volume normalization mode instead of
+            re-evaluating it from the (possibly just-updated) loudness measurement. Used by
+            the crossfade path to keep a track's replayed intro and its body on the same mode.
         """
         if queue_item.media_type == MediaType.AUDIO_SOURCE:
             async for chunk in self.get_audio_source_stream(
@@ -1468,29 +1487,35 @@ class StreamsAudio:
 
         logger = self.logger.getChild("queue_item_stream")
 
-        # hydrate loudness from audio analysis (just-in-time, so that a measurement
-        # completed during a previous play is picked up here). A live analyzer run
-        # may have already populated streamdetails.loudness in memory — don't clobber
-        # that, and don't clobber a value set upstream by the music provider.
-        if streamdetails.loudness is None:
-            if analysis := await self.mass.streams.audio_analysis.get_audio_analysis(
-                streamdetails.item_id,
-                streamdetails.provider,
-                media_type=streamdetails.media_type,
-            ):
-                if analysis.loudness_integrated is not None:
-                    streamdetails.loudness = round(analysis.loudness_integrated, 2)
-                if analysis.loudness_album is not None and streamdetails.loudness_album is None:
-                    streamdetails.loudness_album = round(analysis.loudness_album, 2)
+        if normalization_override is not None:
+            # crossfade path pins the body to the intro's mode; skip hydration/re-eval that could flip it
+            streamdetails.volume_normalization_mode = normalization_override
+        else:
+            # hydrate loudness from audio analysis (just-in-time, so that a measurement
+            # completed during a previous play is picked up here). A live analyzer run
+            # may have already populated streamdetails.loudness in memory — don't clobber
+            # that, and don't clobber a value set upstream by the music provider.
+            if streamdetails.loudness is None:
+                if analysis := await self.mass.streams.audio_analysis.get_audio_analysis(
+                    streamdetails.item_id,
+                    streamdetails.provider,
+                    media_type=streamdetails.media_type,
+                    # use the authoritative EBU R128 value, not another provider's loudness proxy
+                    priority=(LOUDNESS_ANALYSIS_DOMAIN,),
+                ):
+                    if analysis.loudness_integrated is not None:
+                        streamdetails.loudness = round(analysis.loudness_integrated, 2)
+                    if analysis.loudness_album is not None and streamdetails.loudness_album is None:
+                        streamdetails.loudness_album = round(analysis.loudness_album, 2)
 
-        # re-evaluate normalization mode: the background loudness analyzer may have
-        # updated streamdetails.loudness since get_stream_details was called
-        if streamdetails.queue_id:
-            core_config = await self.mass.config.get_core_config("streams")
-            player_settings = await self.mass.config.get_player_config(streamdetails.queue_id)
-            streamdetails.volume_normalization_mode = get_normalization_mode(
-                core_config, player_settings, streamdetails
-            )
+            # re-evaluate normalization mode: the background loudness analyzer may have
+            # updated streamdetails.loudness since get_stream_details was called
+            if streamdetails.queue_id:
+                core_config = await self.mass.config.get_core_config("streams")
+                player_settings = await self.mass.config.get_player_config(streamdetails.queue_id)
+                streamdetails.volume_normalization_mode = get_normalization_mode(
+                    core_config, player_settings, streamdetails
+                )
 
         # handle volume normalization
         gain_correct: float | None = None
@@ -1655,7 +1680,7 @@ class StreamsAudio:
         pcm_format: AudioFormat,
         smart_fades_mode: SmartFadesMode = SmartFadesMode.SMART_CROSSFADE,
         standard_crossfade_duration: int = 10,
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """Get the audio stream for a single queue item with (smart) crossfade to the next item."""
         queue = self.mass.player_queues.get(queue_item.queue_id)
         if not queue:
@@ -1728,6 +1753,13 @@ class StreamsAudio:
         # Round down to nearest frame boundary
         crossfade_buffer_size = (crossfade_buffer_size // frame_size) * frame_size
         fade_out_data: bytes | None = None
+        uncredited_tail_bytes = 0
+
+        # pin the body to DYNAMIC when the intro was baked DYNAMIC,
+        # else a late measurement flips it and causes a volume jump
+        norm_override: VolumeNormalizationMode | None = None
+        if crossfade_data and crossfade_data.normalization_mode == VolumeNormalizationMode.DYNAMIC:
+            norm_override = VolumeNormalizationMode.DYNAMIC
 
         if crossfade_data:
             # reported media-time (TRIM + CF) is decoupled from the raw buffer seek below (X)
@@ -1769,6 +1801,7 @@ class StreamsAudio:
             pcm_format,
             seek_position=discard_seconds,
             playback_speed=playback_speed,
+            normalization_override=norm_override,
         ):
             total_chunks_received += 1
             if discard_leftover:
@@ -1846,6 +1879,9 @@ class StreamsAudio:
             # the remaining buffer is the fade-out tail of the current track
             fade_out_data = bytes(buffer)
             buffer = bytearray()
+            # initialized before the try block — the except handler reads these
+            first_part_written = 0
+            second_part_buf = bytearray()
             try:
                 # wrap the next track's stream in a counting generator that caps
                 # at crossfade_buffer_size and tracks how many bytes were consumed
@@ -1853,7 +1889,7 @@ class StreamsAudio:
 
                 _next_item = next_queue_item
 
-                async def _limited_fade_in() -> AsyncGenerator[bytes, None]:
+                async def _limited_fade_in() -> AsyncGenerator[bytes]:
                     nonlocal fade_in_bytes_consumed
                     async for chunk in self.get_queue_item_stream(
                         _next_item,
@@ -1878,7 +1914,7 @@ class StreamsAudio:
                     pcm_format=pcm_format,
                     standard_crossfade_duration=standard_crossfade_duration,
                     mode=smart_fades_mode,
-                    fade_out_bytes_len=len(fade_out_data),
+                    fade_out_data=fade_out_data,
                     fade_in_bytes_len=crossfade_buffer_size,
                 )
                 crossfade_timing = smart_fade.timing_info
@@ -1888,8 +1924,6 @@ class StreamsAudio:
                     * pcm_format.pcm_sample_size
                 )
                 fadeout_share_bytes = (fadeout_share_bytes // frame_size) * frame_size
-                first_part_written = 0
-                second_part_buf = bytearray()
                 async for mix_chunk in self.smart_fades_mixer.mix(
                     smart_fade,
                     fade_in_part=_limited_fade_in(),
@@ -1910,6 +1944,8 @@ class StreamsAudio:
                             bytes_written += len(mix_chunk)
                     else:
                         second_part_buf.extend(mix_chunk)
+                # tail consumed by the mix but not credited to bytes_written
+                uncredited_tail_bytes = len(fade_out_data) - first_part_written
                 self._crossfade_data[queue_item.queue_id] = CrossfadeData(
                     data=bytes(second_part_buf),
                     fade_in_size=fade_in_bytes_consumed,
@@ -1920,6 +1956,9 @@ class StreamsAudio:
                         crossfade_timing.fadein_trimmed_duration
                         + crossfade_timing.crossfade_duration
                     ),
+                    normalization_mode=cast(
+                        "StreamDetails", next_queue_item.streamdetails
+                    ).volume_normalization_mode,
                 )
                 crossfade_elapsed = asyncio.get_event_loop().time() - crossfade_start_time
                 self.logger.debug(
@@ -1951,10 +1990,12 @@ class StreamsAudio:
         # this also accounts for crossfade and silence stripping
         seconds_streamed = bytes_written / pcm_format.pcm_sample_size
         streamdetails.seconds_streamed = seconds_streamed
+        uncredited_tail_seconds = uncredited_tail_bytes / pcm_format.pcm_sample_size
         # streamdetails.duration is in media-time; seconds_streamed is stream-time
         # (post-atempo), so we scale by playback_speed to recover media-time.
         streamdetails.duration = int(
-            streamdetails.seek_position + seconds_streamed * playback_speed
+            streamdetails.seek_position
+            + (seconds_streamed + uncredited_tail_seconds) * playback_speed
         )
         # propagate accurate duration to queue_item so UI displays it
         queue_item.duration = streamdetails.duration
@@ -1969,7 +2010,7 @@ class StreamsAudio:
 
     async def get_queue_flow_stream(
         self, queue: PlayerQueue, start_queue_item: QueueItem, pcm_format: AudioFormat
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Get a flow stream of all tracks in the queue as raw PCM audio.
 
@@ -2000,7 +2041,10 @@ class StreamsAudio:
             standard_crossfade_duration = 0
         else:
             smart_fades_mode = await self.mass.config.get_player_config_value(
-                queue.queue_id, CONF_SMART_FADES_MODE, return_type=SmartFadesMode
+                queue.queue_id,
+                CONF_SMART_FADES_MODE,
+                default=SmartFadesMode.DISABLED,
+                return_type=SmartFadesMode,
             )
             standard_crossfade_duration = self.mass.config.get_raw_player_config_value(
                 queue.queue_id, CONF_CROSSFADE_DURATION, 10
@@ -2014,10 +2058,11 @@ class StreamsAudio:
             if flow_player
             else []
         )
-        # smart crossfade requires a large buffer for beat analysis
-        if (
-            smart_fades_mode == SmartFadesMode.SMART_CROSSFADE
-            and self.mass.config.get_raw_core_config_value(
+        # smart crossfade needs the smart_fades analysis provider (for beat/key data) and a
+        # non-minimal buffer for beat analysis; fall back to standard crossfade otherwise.
+        if smart_fades_mode == SmartFadesMode.SMART_CROSSFADE and (
+            self.mass.get_provider(SMART_FADES_ANALYSIS_DOMAIN) is None
+            or self.mass.config.get_raw_core_config_value(
                 "streams", CONF_BUFFER_SIZE, CONF_BUFFER_SIZE_DEFAULT
             )
             == BufferSize.MINIMAL
@@ -2137,7 +2182,7 @@ class StreamsAudio:
                     pcm_format=pcm_format,
                     standard_crossfade_duration=standard_crossfade_duration,
                     mode=smart_fades_mode,
-                    fade_out_bytes_len=len(last_fadeout_part),
+                    fade_out_data=last_fadeout_part,
                     fade_in_bytes_len=crossfade_buffer_size,
                 )
                 timing_info = crossfade_smart_fade.timing_info
@@ -2320,10 +2365,13 @@ class StreamsAudio:
             # this also accounts for crossfade and silence stripping
             seconds_streamed = bytes_written / pcm_sample_size
             queue_track.streamdetails.seconds_streamed = seconds_streamed
+            # the held-back crossfade tail still counts as this track's media-time
+            tail_seconds = len(last_fadeout_part) / pcm_sample_size
             # streamdetails.duration is in media-time; seconds_streamed is stream-time
             # (post-atempo), so we scale by the track's playback_speed to recover media-time.
             queue_track.streamdetails.duration = int(
-                queue_track.streamdetails.seek_position + seconds_streamed * track_playback_speed
+                queue_track.streamdetails.seek_position
+                + (seconds_streamed + tail_seconds) * track_playback_speed
             )
             # propagate accurate duration to queue_item so UI displays it
             queue_track.duration = queue_track.streamdetails.duration
@@ -2354,14 +2402,13 @@ class StreamsAudio:
             for pcm_slice in iter_pcm_slices(last_fadeout_part, pcm_format, 1000):
                 yield pcm_slice
                 await asyncio.sleep(0)
-            # correct seconds streamed/duration
+            # correct seconds streamed - the duration already includes the tail
             last_part_seconds = len(last_fadeout_part) / pcm_sample_size
             streamdetails = queue_track.streamdetails
             assert streamdetails is not None
             streamdetails.seconds_streamed = (
                 streamdetails.seconds_streamed or 0
             ) + last_part_seconds
-            streamdetails.duration = int((streamdetails.duration or 0) + last_part_seconds)
             # also update the play log entry so elapsed time tracking stays in sync
             if last_play_log_entry:
                 assert last_play_log_entry.seconds_streamed is not None
@@ -2457,7 +2504,7 @@ class StreamsAudio:
 
     async def get_shoutcast_stream(
         self, url: str, streamdetails: StreamDetails
-    ) -> AsyncGenerator[bytes, None]:
+    ) -> AsyncGenerator[bytes]:
         """
         Yield audio from a legacy Shoutcast server, with ICY metadata parsed inline.
 
@@ -2822,7 +2869,7 @@ class StreamsAudio:
         return needs_restart
 
     @asynccontextmanager
-    async def _connect_radio_stream(self, url: str, **kwargs: Any) -> AsyncGenerator[Any, None]:
+    async def _connect_radio_stream(self, url: str, **kwargs: Any) -> AsyncGenerator[Any]:
         """
         Connect to a radio stream URL with fallback for legacy SSL/TLS configurations.
 

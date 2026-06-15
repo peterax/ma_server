@@ -38,7 +38,8 @@ from music_assistant.constants import (
     DB_TABLE_TRACK_ARTISTS,
     DB_TABLE_TRACKS,
     DEFAULT_GENRE_MAPPING,
-    GENRE_ICONS_DIR,
+    GENRE_ICONS_DIR_NAME,
+    RESOURCES_DIR,
 )
 from music_assistant.controllers.tasks.context import update_current_task_progress_text
 from music_assistant.helpers.compare import create_safe_string
@@ -196,12 +197,12 @@ class GenreController(MediaControllerBase[Genre]):
         """
         if not translation_key:
             return None
-        icon_path = GENRE_ICONS_DIR / f"{translation_key}.svg"
+        icon_path = RESOURCES_DIR.joinpath(GENRE_ICONS_DIR_NAME, f"{translation_key}.svg")
         if not icon_path.is_file():
             return None
         image = MediaItemImage(
             type=ImageType.THUMB,
-            path=str(icon_path),
+            path=f"{GENRE_ICONS_DIR_NAME}/{translation_key}.svg",
             provider="builtin",
         )
         return MediaItemMetadata(images=UniqueList([image]))
@@ -375,7 +376,7 @@ class GenreController(MediaControllerBase[Genre]):
             extra_parts.append(
                 f"EXISTS(SELECT 1 FROM {gm} gm WHERE gm.genre_id = {self.db_table}.item_id)"
             )
-        return await self.get_library_items_by_query(
+        items = await self.get_library_items_by_query(
             favorite=favorite,
             search=search,
             limit=limit,
@@ -384,6 +385,19 @@ class GenreController(MediaControllerBase[Genre]):
             extra_query_params=extra_params,
             extra_query_parts=extra_parts,
         )
+        if kwargs.get("_localized_fallback", True) and search and not items:
+            # retry with the canonical name behind a localized query, so genres are findable
+            # by the name shown in the user's language (see _localized_search_fallback)
+            return await self._localized_search_fallback(
+                search,
+                limit=limit,
+                offset=offset,
+                favorite=favorite,
+                order_by=order_by,
+                hide_empty=hide_empty,
+                media_type=media_type,
+            )
+        return items
 
     async def radio_mode_base_tracks(
         self,
@@ -572,18 +586,18 @@ class GenreController(MediaControllerBase[Genre]):
         item = await self.get(item_id, provider)
         db_id = int(item.item_id)
         gm = DB_TABLE_GENRE_MEDIA_ITEM_MAPPING
-        media_rows: list[tuple[MediaType, str]] = [
-            (MediaType.ARTIST, "Artists"),
-            (MediaType.ALBUM, "Albums"),
-            (MediaType.TRACK, "Tracks"),
-            (MediaType.PLAYLIST, "Playlists"),
-            (MediaType.RADIO, "Radio"),
-            (MediaType.PODCAST, "Podcasts"),
-            (MediaType.AUDIOBOOK, "Audiobooks"),
+        media_rows: list[tuple[MediaType, str, str]] = [
+            (MediaType.ARTIST, "Artists", "artists"),
+            (MediaType.ALBUM, "Albums", "albums"),
+            (MediaType.TRACK, "Tracks", "tracks"),
+            (MediaType.PLAYLIST, "Playlists", "playlists"),
+            (MediaType.RADIO, "Radio", "radios"),
+            (MediaType.PODCAST, "Podcasts", "podcasts"),
+            (MediaType.AUDIOBOOK, "Audiobooks", "audiobooks"),
         ]
 
         async def _fetch_media_type(
-            media_type: MediaType, title: str
+            media_type: MediaType, title: str, translation_key: str
         ) -> RecommendationFolder | None:
             ctrl = self.mass.music.get_controller(media_type)
             query = (
@@ -605,11 +619,14 @@ class GenreController(MediaControllerBase[Genre]):
             return RecommendationFolder(
                 item_id=f"genre_{media_type.value}",
                 name=title,
+                translation_key=translation_key,
                 provider="library",
                 items=UniqueList(items[:limit]),
             )
 
-        results = await asyncio.gather(*[_fetch_media_type(mt, title) for mt, title in media_rows])
+        results = await asyncio.gather(
+            *[_fetch_media_type(mt, title, key) for mt, title, key in media_rows]
+        )
         return [r for r in results if r is not None]
 
     async def get_genre_media_counts(self, genre_ids: list[str]) -> dict[str, dict[str, int]]:

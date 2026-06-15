@@ -8,11 +8,22 @@ from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 
 from .constants import (
+    CONF_CONFIG_READ,
+    CONF_CONFIG_WRITE_CORE,
+    CONF_CONFIG_WRITE_PLAYER,
+    CONF_CONFIG_WRITE_PROVIDER,
+    CONF_CONFIG_WRITE_SECRET,
     CONF_CONNECT_EXTERNAL_URL,
     CONF_CONTROL_MEDIA,
     CONF_CONTROL_PLAYBACK,
     CONF_CONTROL_PLAYERS,
     CONF_CONTROL_VOLUME,
+    CONF_DEBUG_EVENT_BUFFER_CAPACITY,
+    CONF_DEBUG_EVENTS,
+    CONF_DEBUG_INSPECT,
+    CONF_DEBUG_LOGS,
+    CONF_DEBUG_PROVIDERS,
+    CONF_DEBUG_RELOAD,
     CONF_DELETE_FAVORITES,
     CONF_DELETE_LIBRARY,
     CONF_DELETE_PLAYLISTS,
@@ -81,105 +92,53 @@ def build_config_entries(
         ConfigEntry(
             key="open_connect",
             type=ConfigEntryType.ACTION,
-            label="Open Connect Wizard",
-            description=(
-                "One-click setup for Claude Desktop, Claude Code, Cursor, "
-                "Windsurf, VSCode, ChatGPT and other MCP clients. Mints a "
-                "per-client token labelled `MCP — <Client>` (revocable in "
-                "Profile → Long-lived access tokens) and copies the ready-to-paste "
-                "snippet for you."
-            ),
             action="open_connect",
             required=False,
         ),
         ConfigEntry(
             key=CONF_REQUIRE_AUTH,
             type=ConfigEntryType.BOOLEAN,
-            label="Require authentication",
             default_value=True,
             category="Server",
-            description=(
-                "Reject unauthenticated MCP clients. Strongly recommended — "
-                "with auth disabled, every MCP client on the network can drive playback."
-            ),
             required=False,
         ),
         ConfigEntry(
             key=CONF_MOUNT_PATH,
             type=ConfigEntryType.STRING,
-            label="Mount path",
             default_value=DEFAULT_MOUNT_PATH,
             category="Server",
             advanced=True,
-            description=(
-                "HTTP path prefix where the MCP server is mounted on MA's webserver. "
-                "Change only if it conflicts with another route."
-            ),
             required=False,
         ),
         ConfigEntry(
             key=CONF_REQUIRE_CONFIRMATION,
             type=ConfigEntryType.BOOLEAN,
-            label="Confirm destructive operations",
             default_value=True,
             category="Server",
-            description=(
-                "Ask the MCP client to confirm before running destructive tools "
-                "(clear_queue, remove_tracks, remove_from_library, "
-                "remove_from_favorites). If the client doesn't support "
-                "elicitation, the call falls through to the permission flag."
-            ),
             required=False,
         ),
         ConfigEntry(
             key=CONF_ENFORCE_AUDIENCE,
             type=ConfigEntryType.BOOLEAN,
-            label="Enforce token audience (RFC 8707)",
             default_value=False,
             category="Server",
             advanced=True,
-            description=(
-                "Reject Bearer tokens whose `aud` claim does not match this MCP "
-                "server's canonical URI. Mitigates the OAuth confused-deputy "
-                "attack where a token issued for one MA endpoint is replayed "
-                "against another. Requires upstream Music Assistant support for "
-                "writing `aud` into JWTs (in progress) — until then enabling "
-                "this rejects all existing tokens. Leave off unless your MA "
-                "build issues audience-bound tokens."
-            ),
             required=False,
         ),
         ConfigEntry(
             key=CONF_EXTRA_ALLOWED_ORIGINS,
             type=ConfigEntryType.STRING,
-            label="Additional allowed Origins (CSV)",
             default_value="",
             category="Server",
             advanced=True,
-            description=(
-                "Comma-separated list of additional `Origin` headers to accept "
-                "(e.g. `https://ha.example.com` for Home Assistant ingress, or a "
-                "reverse-proxy hostname). By default the server only accepts "
-                "`localhost`, `127.0.0.1`, the MA `base_url` host, and `publish_ip`. "
-                "Mismatching Origins are rejected with 403 to mitigate DNS rebinding."
-            ),
             required=False,
         ),
         ConfigEntry(
             key=CONF_CONNECT_EXTERNAL_URL,
             type=ConfigEntryType.STRING,
-            label="Connect Wizard external URL (fallback)",
             default_value="",
             category="Server",
             advanced=True,
-            description=(
-                "Optional explicit base URL the Connect Wizard should open at "
-                "(e.g. `https://ha.example.com/<addon-slug>` for Home Assistant "
-                "add-on ingress). Used only when the wizard cannot auto-detect "
-                "the external URL from the active client connection — set it "
-                "if your reverse proxy strips the `X-Forwarded-Host` / "
-                "`X-Ingress-Path` headers."
-            ),
             required=False,
         ),
         # Query permissions
@@ -319,5 +278,104 @@ def build_config_entries(
             True,
             "MCP Resources",
             "Pre-defined prompts: find_and_play, party_playlist, now_playing_summary.",
+        ),
+        # Debug namespace — all off-by-default. See specs/inprogress/0005-debug-namespace.md.
+        _bool(
+            CONF_DEBUG_INSPECT,
+            "Debug: inspect raw player/queue/provider state",
+            False,
+            "Debug",
+            "Exposes raw runtime state of players, queues, and providers via MCP. "
+            "Intended for development and troubleshooting. Disable in production.",
+        ),
+        _bool(
+            CONF_DEBUG_LOGS,
+            "Debug: tail musicassistant.log",
+            False,
+            "Debug",
+            "Allows MCP clients to read the tail of MA's log file with filters. "
+            "Common token patterns are redacted. Intended for troubleshooting. "
+            "Disable in production.",
+        ),
+        _bool(
+            CONF_DEBUG_EVENTS,
+            "Debug: read recent MA events",
+            False,
+            "Debug",
+            "Subscribes to MA's event bus at provider startup and exposes a "
+            "ring buffer over MCP. Memory cost is bounded by the buffer "
+            "capacity. Intended for troubleshooting. Disable in production.",
+        ),
+        _bool(
+            CONF_DEBUG_PROVIDERS,
+            "Debug: inspect configured providers",
+            False,
+            "Debug",
+            "Exposes provider state, masked configuration, registered "
+            "webserver routes, installed package versions, and a health "
+            "summary roll-up. Intended for troubleshooting. Disable in "
+            "production.",
+        ),
+        _bool(
+            CONF_DEBUG_RELOAD,
+            "Debug: reload a provider instance",
+            False,
+            "Debug",
+            "Allows MCP clients to unload and reload provider instances, "
+            "INTERRUPTING ANY ACTIVE STREAMS on the affected provider. "
+            "Each call requires elicitation confirmation. Intended for "
+            "provider-development iteration. Disable in production.",
+        ),
+        ConfigEntry(
+            key=CONF_DEBUG_EVENT_BUFFER_CAPACITY,
+            type=ConfigEntryType.INTEGER,
+            default_value=500,
+            range=(50, 5000),
+            category="Debug",
+            required=False,
+        ),
+        # Config namespace — all off-by-default. See specs/inprogress/0006-config-read-write.md.
+        _bool(
+            CONF_CONFIG_READ,
+            "Config: read core/provider/player settings",
+            False,
+            "Config",
+            "Exposes read access to MA core, provider, and player configuration "
+            "over MCP (secrets stay masked). Disable in production unless needed.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_PROVIDER,
+            "Config: edit provider settings",
+            False,
+            "Config",
+            "Allows MCP clients to change provider configuration and trigger "
+            "provider config actions. Changes may reload the provider and "
+            "interrupt its streams. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_CORE,
+            "Config: edit core settings",
+            False,
+            "Config",
+            "Allows MCP clients to change MA core controller configuration "
+            "(webserver, streams, cache, ...). Core changes may RESTART "
+            "subsystems and interrupt ALL playback. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_PLAYER,
+            "Config: edit player settings",
+            False,
+            "Config",
+            "Allows MCP clients to change per-player configuration and DSP. Disable in production.",
+        ),
+        _bool(
+            CONF_CONFIG_WRITE_SECRET,
+            "Config: allow writing secret values",
+            False,
+            "Config",
+            "Required IN ADDITION to a category write flag before any "
+            "SECURE_STRING (password/token) value can be written. With this "
+            "off, secret writes are rejected while non-secret edits still "
+            "work. Keep off unless deliberately rotating credentials.",
         ),
     )

@@ -24,12 +24,13 @@ from importlib.metadata import version as pkg_version
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, Protocol, Self, TypeVar, cast
 from urllib.parse import urlparse
 
 import chardet
 import ifaddr
 from music_assistant_models.enums import AlbumType, IdentifierType
+from music_assistant_models.errors import SetupFailedError
 from zeroconf import InterfaceChoice, IPVersion
 
 from music_assistant.constants import (
@@ -49,8 +50,6 @@ if TYPE_CHECKING:
 
     from music_assistant.mass import MusicAssistant
     from music_assistant.models import ProviderModuleType
-    from music_assistant.models.core_controller import CoreController
-    from music_assistant.models.provider import Provider
 
 from dataclasses import fields, is_dataclass
 
@@ -129,6 +128,73 @@ def get_total_system_memory() -> float:
         # Fallback if sysconf is not available (e.g., Windows)
         # Return a conservative default to disable buffering by default
         return 0.0
+
+
+class UnsupportedSystemError(SetupFailedError):
+    """
+    Raised when the host does not meet a provider's minimum requirements.
+
+    Subclass of SetupFailedError so existing setup handling still applies, but it
+    marks a permanent condition (RAM, CPU cores, CPU capability) that will not
+    resolve at runtime, so the provider load must not be retried.
+    """
+
+
+def verify_system_meets_requirements(
+    *,
+    feature_name: str,
+    min_memory_gb: float = 0.0,
+    min_cpu_cores: int = 0,
+    require_ml_inference: bool = False,
+) -> None:
+    """
+    Verify the host meets the minimum CPU/RAM requirements for a heavy provider.
+
+    :param feature_name: Human-readable provider name used in the error message.
+    :param min_memory_gb: Minimum total system RAM in GB (0 disables the check).
+    :param min_cpu_cores: Minimum CPU core count (0 disables the check).
+    :param require_ml_inference: When True, also verify the CPU can run on-device
+        torch inference (AVX2 on x86). Checked last, as it imports torch.
+    :raises UnsupportedSystemError: If the system does not meet the requirements.
+    """
+    cpu_cores = os.process_cpu_count() or os.cpu_count() or 1
+    if min_cpu_cores and cpu_cores < min_cpu_cores:
+        raise UnsupportedSystemError(
+            f"This system does not meet the minimal requirements for {feature_name}: "
+            f"at least {min_cpu_cores} CPU cores are required ({cpu_cores} detected)."
+        )
+    total_memory_gb = get_total_system_memory()
+    # get_total_system_memory() returns 0.0 when the platform cannot report memory
+    # (e.g. Windows); treat that as unknown and fail open rather than block setup.
+    if min_memory_gb and total_memory_gb and total_memory_gb < min_memory_gb:
+        raise UnsupportedSystemError(
+            f"This system does not meet the minimal requirements for {feature_name}: "
+            f"at least {min_memory_gb:.0f}GB of RAM is required "
+            f"({total_memory_gb:.1f}GB detected)."
+        )
+    if require_ml_inference:
+        verify_cpu_supports_ml_inference()
+
+
+def verify_cpu_supports_ml_inference() -> None:
+    """
+    Verify the CPU can run on-device ML (torch) inference.
+
+    :raises UnsupportedSystemError: If this is an x86 CPU without AVX2 support, which
+        torch's FBGEMM quantized backend requires.
+    """
+    if platform.machine().lower() not in ("x86_64", "amd64", "i386", "i686", "x86"):
+        # non-x86 (ARM) machines run quantized inference via QNNPACK instead of FBGEMM
+        return
+    import torch  # noqa: PLC0415
+
+    if torch.backends.cpu.get_cpu_capability() in ("DEFAULT", "NO AVX"):
+        raise UnsupportedSystemError(
+            "On-device audio analysis requires a CPU with AVX2 support "
+            "(Intel Haswell / AMD Zen or newer). This CPU does not support AVX2. "
+            "If you are running in a virtual machine (e.g. Proxmox), changing the "
+            "CPU type to 'host' may expose AVX2 to the guest."
+        )
 
 
 keyword_pattern = re.compile("title=|artist=")
@@ -316,8 +382,12 @@ def parse_title_and_version(
         return title, version
 
     # Standard version parsing
-    for regex in (r"\(.*?\)", r"\[.*?\]", r" - .*"):
-        for title_part in re.findall(regex, title):
+    for parts in (
+        _balanced_bracket_groups(title, "(", ")"),
+        _balanced_bracket_groups(title, "[", "]"),
+        re.findall(r" - .*", title),
+    ):
+        for title_part in parts:
             # Extract the content without brackets/dashes for checking
             clean_part = title_part.translate(str.maketrans("", "", "()[]-")).strip().lower()
 
@@ -347,11 +417,47 @@ def parse_title_and_version(
             # Check if this part is a version
             for version_str in VERSION_PARTS:
                 if version_str in clean_part:
-                    # Preserve original casing for output
-                    version = title_part.strip("()[]- ").strip()
+                    # Preserve original casing (and any nested brackets) for output
+                    version = _strip_outer_markers(title_part)
                     title = title.replace(title_part, "").strip()
                     return title, version
     return title, version
+
+
+def _balanced_bracket_groups(text: str, open_char: str, close_char: str) -> list[str]:
+    """
+    Return the top-level balanced bracketed substrings, including the outer brackets.
+
+    :param text: The text to scan.
+    :param open_char: The opening bracket character.
+    :param close_char: The closing bracket character.
+    """
+    groups: list[str] = []
+    depth = 0
+    start = -1
+    for idx, char in enumerate(text):
+        if char == open_char:
+            if depth == 0:
+                start = idx
+            depth += 1
+        elif char == close_char and depth > 0:
+            depth -= 1
+            if depth == 0:
+                groups.append(text[start : idx + 1])
+    return groups
+
+
+def _strip_outer_markers(part: str) -> str:
+    """
+    Strip the outer brackets or leading hyphen from a parsed title part.
+
+    :param part: The raw title part as matched from the title.
+    """
+    part = part.strip()
+    # only strip a single outer bracket pair so nested brackets stay intact
+    if part[:1] in "([" and part[-1:] in ")]":
+        return part[1:-1].strip()
+    return part.lstrip("- ").strip()
 
 
 def infer_album_type(title: str, version: str) -> AlbumType:
@@ -901,7 +1007,7 @@ def get_zeroconf_args(
     return {"ip_version": ip_version, "interfaces": InterfaceChoice.All}
 
 
-async def close_async_generator(agen: AsyncGenerator[Any, None]) -> None:
+async def close_async_generator(agen: AsyncGenerator[Any]) -> None:
     """Force close an async generator."""
     task = asyncio.create_task(agen.__anext__())
     task.cancel()
@@ -1230,13 +1336,13 @@ class TaskManager:
         self._tasks: list[asyncio.Task[None]] = []
         self._semaphore = asyncio.Semaphore(limit) if limit else None
 
-    def create_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+    def create_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[None]:
         """Create a new task and add it to the manager."""
         task = self.mass.create_task(coro)
         self._tasks.append(task)
         return task
 
-    async def create_task_with_limit(self, coro: Coroutine[Any, Any, None]) -> None:
+    async def create_task_with_limit(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Create a new task with semaphore limit."""
         assert self._semaphore is not None
 
@@ -1339,13 +1445,22 @@ class TimedAsyncGenerator:
         return self._factory()
 
 
-def guard_single_request[ProviderT: "Provider | CoreController", **P, R](
-    func: Callable[Concatenate[ProviderT, P], Coroutine[Any, Any, R]],
-) -> Callable[Concatenate[ProviderT, P], Coroutine[Any, Any, R]]:
+# Bound for guard_single_request: it only needs ``.mass``, so a structural protocol
+# lets it decorate providers, core controllers and media controllers alike without
+# coupling to their concrete base classes.
+class _SupportsMass(Protocol):
+    """Structural type for objects exposing a MusicAssistant reference."""
+
+    mass: MusicAssistant
+
+
+def guard_single_request[SelfT: _SupportsMass, **P, R](
+    func: Callable[Concatenate[SelfT, P], Coroutine[Any, Any, R]],
+) -> Callable[Concatenate[SelfT, P], Coroutine[Any, Any, R]]:
     """Guard single request to a function."""
 
     @functools.wraps(func)
-    async def wrapper(self: ProviderT, *args: P.args, **kwargs: P.kwargs) -> R:
+    async def wrapper(self: SelfT, *args: P.args, **kwargs: P.kwargs) -> R:
         mass = self.mass
         # create a task_id dynamically based on the function and args/kwargs
         cache_key_parts = [func.__class__.__name__, func.__name__, *args]

@@ -73,6 +73,8 @@ class SmartFadesProvider(AudioAnalysisProvider):
 
     async def handle_async_init(self) -> None:
         """Handle async initialization of the provider."""
+        # Configure torch thread caps before loading any model (see the controller method).
+        self.mass.streams.audio_analysis.ensure_thread_caps_configured()
         (
             self._beat_this_model,
             self._beat_this_post_processor,
@@ -312,10 +314,12 @@ class SmartFadesProvider(AudioAnalysisProvider):
                 data.energy_chunks.append(np.concatenate(rms_list).astype(np.float32))
 
         # Spectral centroid: keep per-frame (hop_length=512, ~43 frames/s)
-        pcm_tensor = torch.from_numpy(pcm_22k)
-        centroid_frames = self._spectral_centroid(pcm_tensor.unsqueeze(0)).squeeze(0).numpy()
-        if len(centroid_frames) > 0:
-            data.centroid_chunks.append(centroid_frames.astype(np.float32))
+        # Skip short tail buffers: STFT reflect-pad requires len > n_fft // 2.
+        if len(pcm_22k) >= self._spectral_centroid.n_fft:
+            pcm_tensor = torch.from_numpy(pcm_22k)
+            centroid_frames = self._spectral_centroid(pcm_tensor.unsqueeze(0)).squeeze(0).numpy()
+            if len(centroid_frames) > 0:
+                data.centroid_chunks.append(centroid_frames.astype(np.float32))
 
     def _compute_musical_key_features(
         self, pcm_mono: np.ndarray, sample_rate: int, data: SmartFadesData

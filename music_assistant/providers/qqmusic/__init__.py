@@ -80,6 +80,7 @@ from qqmusic_api.utils.session import (
     set_session as qq_set_session,
 )
 
+from music_assistant.constants import CONF_ENTRY_UNOFFICIAL_PROVIDER
 from music_assistant.controllers.cache import use_cache
 from music_assistant.models.music_provider import MusicProvider
 
@@ -380,7 +381,6 @@ def _build_config_entries(values: dict[str, ConfigValueType]) -> tuple[ConfigEnt
         ConfigEntry(
             key=CONF_QR_PAGE_URL,
             type=ConfigEntryType.STRING,
-            label="QR login page URL",
             required=False,
             hidden=not has_qr_pending or not qr_page_url,
             value=qr_page_url,
@@ -396,44 +396,37 @@ def _build_config_entries(values: dict[str, ConfigValueType]) -> tuple[ConfigEnt
         ConfigEntry(
             key=CONF_QUALITY,
             type=ConfigEntryType.STRING,
-            label="Preferred quality",
             default_value=QUALITY_MP3_320,
             options=[
-                ConfigValueOption("MP3 128kbps (most compatible)", QUALITY_MP3_128),
-                ConfigValueOption("MP3 320kbps", QUALITY_MP3_320),
-                ConfigValueOption("FLAC (fallback to MP3)", QUALITY_FLAC),
-                ConfigValueOption("Hi-Res (Master, fallback to FLAC/MP3)", QUALITY_HI_RES),
+                ConfigValueOption(QUALITY_MP3_128),
+                ConfigValueOption(QUALITY_MP3_320),
+                ConfigValueOption(QUALITY_FLAC),
+                ConfigValueOption(QUALITY_HI_RES),
             ],
             hidden=not is_verified,
         ),
         ConfigEntry(
             key=CONF_ACTION_START_QQ_QR_AUTH,
             type=ConfigEntryType.ACTION,
-            label="QQ Login",
-            description="Generate a QQ QR code and open the login popup page.",
             action=CONF_ACTION_START_QQ_QR_AUTH,
             hidden=is_verified,
         ),
         ConfigEntry(
             key=CONF_ACTION_START_WX_QR_AUTH,
             type=ConfigEntryType.ACTION,
-            label="WeChat Login",
-            description="Generate a WeChat QR code and open the login popup page.",
             action=CONF_ACTION_START_WX_QR_AUTH,
             hidden=is_verified,
         ),
         ConfigEntry(
             key=CONF_ACTION_CHECK_QR_AUTH,
             type=ConfigEntryType.ACTION,
-            label="Check QR status",
-            description=f"Manually check whether {qr_login_name} scan confirmation is completed.",
+            translation_params=[qr_login_name],
             action=CONF_ACTION_CHECK_QR_AUTH,
             hidden=not has_qr_pending or is_verified,
         ),
         ConfigEntry(
             key=CONF_ACTION_CLEAR_AUTH,
             type=ConfigEntryType.ACTION,
-            label="Reset authentication",
             action=CONF_ACTION_CLEAR_AUTH,
             hidden=not (has_qr_pending or is_verified),
         ),
@@ -505,7 +498,7 @@ async def get_config_entries(
         await _start_qr_auth(mass, values, qq_login_mod.QRLoginType.WX)
     elif action == CONF_ACTION_CHECK_QR_AUTH:
         await _check_qr_auth(values)
-    return _build_config_entries(values)
+    return (CONF_ENTRY_UNOFFICIAL_PROVIDER, *_build_config_entries(values))
 
 
 class QQMusicProvider(MusicProvider):
@@ -1174,7 +1167,7 @@ class QQMusicProvider(MusicProvider):
             self.logger.debug("Failed to load QQ Music lyrics for %s: %s", prov_track_id, err)
         return track
 
-    async def get_library_artists(self) -> AsyncGenerator[Artist, None]:
+    async def get_library_artists(self) -> AsyncGenerator[Artist]:
         """Retrieve followed artists from QQ Music."""
         euin = await self._ensure_user_euin()
         page = 1
@@ -1211,7 +1204,7 @@ class QQMusicProvider(MusicProvider):
             page += 1
         self.logger.info("QQ library artists sync yielded %s artist(s)", total_yielded)
 
-    async def get_library_tracks(self) -> AsyncGenerator[Track, None]:
+    async def get_library_tracks(self) -> AsyncGenerator[Track]:
         """Retrieve library tracks from QQ Music."""
         euin = await self._ensure_user_euin()
         page = 1
@@ -1237,7 +1230,7 @@ class QQMusicProvider(MusicProvider):
                 break
             page += 1
 
-    async def get_library_albums(self) -> AsyncGenerator[Album, None]:
+    async def get_library_albums(self) -> AsyncGenerator[Album]:
         """Retrieve library albums from QQ Music."""
         euin = await self._ensure_user_euin()
         page = 1
@@ -1272,7 +1265,7 @@ class QQMusicProvider(MusicProvider):
             page += 1
         self.logger.info("QQ library albums sync yielded %s album(s)", total_yielded)
 
-    async def get_library_playlists(self) -> AsyncGenerator[Playlist, None]:
+    async def get_library_playlists(self) -> AsyncGenerator[Playlist]:
         """Retrieve user playlists from QQ Music."""
         euin = await self._ensure_user_euin()
         created = await self._run_with_session(

@@ -153,9 +153,9 @@ class SqueezelitePlayer(Player):
         # create preset entries (for players that support it)
         presets = []
         async for playlist in self.mass.music.playlists.iter_library_items(True):
-            presets.append(ConfigValueOption(playlist.name, playlist.uri))
+            presets.append(ConfigValueOption(playlist.uri, title=playlist.name))
         async for radio in self.mass.music.radio.iter_library_items(True):
-            presets.append(ConfigValueOption(radio.name, radio.uri))
+            presets.append(ConfigValueOption(radio.uri, title=radio.name))
         preset_count = 10
         preset_entries = [
             ConfigEntry(
@@ -273,7 +273,10 @@ class SqueezelitePlayer(Player):
         )
         smart_fades_mode = (
             await self.mass.config.get_player_config_value(
-                self.player_id, CONF_SMART_FADES_MODE, return_type=SmartFadesMode
+                self.player_id,
+                CONF_SMART_FADES_MODE,
+                default=SmartFadesMode.DISABLED,
+                return_type=SmartFadesMode,
             )
             if media.media_type == MediaType.TRACK
             else SmartFadesMode.DISABLED

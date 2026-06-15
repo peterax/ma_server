@@ -95,18 +95,12 @@ async def get_config_entries(
         ConfigEntry(
             key=CONF_MASS_PLAYER_ID,
             type=ConfigEntryType.STRING,
-            label="Connected Music Assistant Player",
-            description="The Music Assistant player connected to this AirPlay receiver plugin. "
-            "When you stream audio via AirPlay to this virtual speaker, "
-            "the audio will play on the selected player. "
-            "Set to 'Auto' to automatically select a currently playing player, "
-            "or the first available player if none is playing.",
             multi_value=False,
             default_value=PLAYER_ID_AUTO,
             options=[
-                ConfigValueOption("Auto (prefer playing player)", PLAYER_ID_AUTO),
+                ConfigValueOption(PLAYER_ID_AUTO),
                 *(
-                    ConfigValueOption(x.display_name, x.player_id)
+                    ConfigValueOption(x.player_id, title=x.display_name)
                     for x in sorted(
                         mass.players.all_players(False, False), key=lambda p: p.display_name.lower()
                     )
@@ -117,8 +111,6 @@ async def get_config_entries(
         ConfigEntry(
             key=CONF_AIRPLAY_NAME,
             type=ConfigEntryType.STRING,
-            label="AirPlay Device Name",
-            description="How should this AirPlay receiver be named in the AirPlay device list?",
             default_value="Music Assistant",
         ),
     )
@@ -153,7 +145,20 @@ class AirPlayReceiverProvider(PluginProvider):
         # Each instance gets a unique port: 7000, 7001, 7002, etc.
         self.airplay_port = 7000 + (hash(self.instance_id) % 1000)
         airplay_name = cast("str", self.config.get_value(CONF_AIRPLAY_NAME)) or self.name
+        # _audio_format describes the original AirPlay source (ALAC at 44.1/16,
+        # the protocol-native format AirPlay senders use) and is what we
+        # advertise to clients for source-format display.
         self._audio_format = AudioFormat(
+            content_type=ContentType.ALAC,
+            codec_type=ContentType.ALAC,
+            sample_rate=44100,
+            bit_depth=16,
+            channels=2,
+        )
+        # _decoded_audio_format is what shairport-sync actually pipes into MA
+        # after decoding the ALAC stream; the streams controller hands this to
+        # ffmpeg as the input format so it can read the FIFO correctly.
+        self._decoded_audio_format = AudioFormat(
             content_type=ContentType.PCM_S16LE,
             codec_type=ContentType.PCM_S16LE,
             sample_rate=44100,
@@ -260,6 +265,7 @@ class AirPlayReceiverProvider(PluginProvider):
             provider=self.instance_id,
             item_id=source_id,
             audio_format=self._audio_format,
+            decoded_audio_format=self._decoded_audio_format,
             media_type=MediaType.AUDIO_SOURCE,
             stream_type=StreamType.NAMED_PIPE,
             path=self.audio_pipe.path,
