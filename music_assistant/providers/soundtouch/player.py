@@ -5,11 +5,17 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from aiohttp import ClientError, WSMsgType
 from music_assistant_models.config_entries import ConfigEntry, ConfigValueOption
-from music_assistant_models.enums import ConfigEntryType, IdentifierType, MediaType, PlaybackState
+from music_assistant_models.enums import (
+    ConfigEntryType,
+    IdentifierType,
+    MediaType,
+    PlaybackState,
+    PlayerType,
+)
 from music_assistant_models.errors import PlayerCommandFailed
 
 from music_assistant.constants import CONF_PLAYERS
@@ -44,6 +50,8 @@ if TYPE_CHECKING:
 class SoundTouchPlayer(Player):
     """Music Assistant player for a Bose SoundTouch device."""
 
+    _recent_group_preset_commands: ClassVar[dict[tuple[str, str], float]] = {}
+
     def __init__(
         self,
         provider: SoundTouchPlayerProvider,
@@ -62,6 +70,7 @@ class SoundTouchPlayer(Player):
         self._attr_source_list = []
         self._handling_local_preset = False
         self._last_bose_preset_signatures: dict[int, str] = {}
+        self._last_status_log_signature: tuple[Any, ...] | None = None
         self._websocket_refresh_pending = False
         self._websocket_stopping = False
         self._websocket_task: asyncio.Task[None] | None = None
@@ -230,6 +239,7 @@ class SoundTouchPlayer(Player):
         self._update_volume(volume)
         self._update_playback(status)
         self._update_media(status)
+        self._log_status_transition(status)
         self._update_sources(sources, presets)
         await self._handle_hardware_preset_update(status, presets)
         self.update_state()
@@ -353,7 +363,7 @@ class SoundTouchPlayer(Player):
         if str(slot) not in self._get_local_presets():
             return
         self.logger.debug("SoundTouch hardware preset %s selected on %s", slot, self.name)
-        await self._play_local_preset(slot)
+        await self._play_local_preset(slot, prefer_configured_group=True)
 
     def _update_volume(self, volume: Any) -> None:
         """Map SoundTouch volume model to Music Assistant volume attributes."""
@@ -419,6 +429,44 @@ class SoundTouchPlayer(Player):
             elapsed_time=position,
             elapsed_time_last_updated=time.time() if position is not None else None,
             source_id=self._attr_active_source,
+        )
+
+    def _log_status_transition(self, status: Any) -> None:
+        """Log SoundTouch status changes that affect linked protocol playback."""
+        protocol_state = None
+        protocol_player_id = self.active_output_protocol
+        if protocol_player_id and protocol_player_id != "native":
+            if protocol_player := self.mass.players.get_player(protocol_player_id):
+                protocol_state = protocol_player.state.playback_state
+
+        signature = (
+            self._get_first_attr(status, "Source", "source", default=None),
+            self._get_first_attr(status, "SourceAccount", "source_account", default=None),
+            self._get_first_attr(status, "play_status", "PlayStatus", "state", default=None),
+            self._attr_playback_state,
+            self._attr_active_source,
+            protocol_player_id,
+            protocol_state,
+            tuple(self.group_members),
+            self.synced_to,
+        )
+        if signature == self._last_status_log_signature:
+            return
+        self._last_status_log_signature = signature
+        self.logger.info(
+            "SoundTouch status %s: source=%s source_account=%s play_status=%s "
+            "mapped_state=%s active_source=%s active_protocol=%s protocol_state=%s "
+            "group_members=%s synced_to=%s",
+            self.name,
+            signature[0],
+            signature[1],
+            signature[2],
+            signature[3],
+            signature[4],
+            signature[5],
+            signature[6],
+            signature[7],
+            signature[8],
         )
 
     def _update_sources(self, sources: Any, presets: Any) -> None:
@@ -535,19 +583,52 @@ class SoundTouchPlayer(Player):
             return
         if str(slot) not in self._get_local_presets():
             return
-        await self._play_local_preset(slot)
+        await self._play_local_preset(slot, prefer_configured_group=True)
 
-    async def _play_local_preset(self, slot: int) -> None:
+    async def _play_local_preset(
+        self,
+        slot: int,
+        prefer_configured_group: bool = False,
+    ) -> None:
         """Play a Music Assistant local preset slot."""
         local_presets = self._get_local_presets()
         preset = local_presets.get(str(slot))
         if not preset:
             raise PlayerCommandFailed(f"MA preset {slot} is not configured")
+        target_player_id = self._get_local_preset_target_player_id(prefer_configured_group)
+        uri = preset["uri"]
+        if target_player_id != self.player_id:
+            recent_key = (target_player_id, uri)
+            now = time.monotonic()
+            if now - self._recent_group_preset_commands.get(recent_key, 0) < 2:
+                self.logger.debug(
+                    "Ignoring duplicate SoundTouch preset %s for group %s",
+                    slot,
+                    target_player_id,
+                )
+                return
+            self._recent_group_preset_commands[recent_key] = now
         self._handling_local_preset = True
         try:
-            await self.mass.player_queues.play_media(self.player_id, preset["uri"])
+            await self.mass.player_queues.play_media(target_player_id, uri)
         finally:
             self._handling_local_preset = False
+
+    def _get_local_preset_target_player_id(self, prefer_configured_group: bool) -> str:
+        """Return the player id that should receive a local preset play command."""
+        if active_group := self.state.active_group:
+            return active_group
+        if not prefer_configured_group:
+            return self.player_id
+        for group_player in self.mass.players.all_players(
+            return_unavailable=False,
+            return_disabled=False,
+        ):
+            if group_player.type != PlayerType.GROUP:
+                continue
+            if self.player_id in group_player.state.group_members:
+                return group_player.player_id
+        return self.player_id
 
     async def _save_current_media_as_local_preset(
         self,

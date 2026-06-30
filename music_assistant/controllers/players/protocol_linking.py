@@ -1701,7 +1701,11 @@ class ProtocolLinkingMixin:
             if (
                 child_protocol_id
                 and protocol_domain
-                and (not parent_protocol_domain or protocol_domain == parent_protocol_domain)
+                and (
+                    not protocol_members
+                    or not parent_protocol_domain
+                    or protocol_domain == parent_protocol_domain
+                )
             ):
                 if not parent_protocol_player or parent_protocol_domain != protocol_domain:
                     parent_protocol = parent_player.get_output_protocol_by_domain(protocol_domain)

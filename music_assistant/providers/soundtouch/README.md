@@ -12,11 +12,11 @@ The provider is marked `experimental`. The first implementation focuses on the M
 - local volume and mute control
 - power on/off
 - polling of now-playing, volume, source, and preset state
-- websocket notifications for hardware preset buttons and faster volume/state updates
+- native aiohttp websocket notifications for hardware preset buttons and faster volume/state updates
 - passive external sources for native SoundTouch services such as AirPlay, Bluetooth, Spotify, TuneIn, and aux inputs
 - SoundTouch preset selection as Music Assistant player sources
 - Music Assistant-local presets that can be saved and played without relying on Bose cloud presets
-- linked DLNA/UPnP playback for Music Assistant queue audio
+- linked output-protocol playback for Music Assistant queue audio, including DLNA/UPnP and AirPlay/Sendspin where available
 
 ## Files
 
@@ -37,11 +37,12 @@ The provider uses:
 
 ```text
 bosesoundtouchapi==1.0.87
+defusedxml==0.7.1
 ```
 
-Version `1.0.87` is the latest PyPI release as of May 28, 2026. The package requires Python `>3.11.0`, which matches current Music Assistant server development expectations.
+Version `1.0.87` of `bosesoundtouchapi` is the latest PyPI release as of May 28, 2026. The package requires Python `>3.11.0`, which matches current Music Assistant server development expectations.
 
-The library exposes `SoundTouchClient` methods for the Webservices API, including `GetNowPlayingStatus`, `GetVolume`, `GetSourceList`, `GetPresetList`, media transport commands, volume control, source selection, and power control. Its websocket helper is used for SoundTouch device notifications.
+The library exposes `SoundTouchClient` methods for the Webservices API, including `GetNowPlayingStatus`, `GetVolume`, `GetSourceList`, `GetPresetList`, media transport commands, volume control, source selection, and power control. Websocket notifications are handled directly with Music Assistant's shared aiohttp session, and raw XML events are parsed with `defusedxml`.
 
 ## Discovery
 
@@ -65,7 +66,7 @@ soundtouch-kitchen.local
 
 SoundTouch devices do not expose a Music Assistant-native queue API, and the SoundTouch Webservices URL playback endpoint is not reliable enough to use as a Music Assistant output protocol. Hardware testing showed that `PlayUrlDlna` can work for simple direct HTTP URLs, but Music Assistant queue playback can leave the speaker's UPnP receiver in the wrong state. The older `PlayUrl` endpoint left the device in `INVALID_SOURCE`.
 
-For that reason, this provider does not advertise native `PLAY_MEDIA`. Music Assistant audio should be sent through a linked output protocol, normally the speaker's DLNA/UPnP protocol player. The SoundTouch provider remains responsible for local control, websocket hardware button handling, volume, power, source selection, and local MA preset mapping.
+For that reason, this provider does not advertise native `PLAY_MEDIA`. Music Assistant audio should be sent through a linked output protocol, for example the speaker's DLNA/UPnP protocol player or its AirPlay/Sendspin protocol player. The SoundTouch provider remains responsible for local control, websocket hardware button handling, volume, power, source selection, and local MA preset mapping.
 
 ## Source Model
 
@@ -85,6 +86,8 @@ ma_preset_save:1
 
 `ma_preset_save:<slot>` stores the currently active Music Assistant media URI in Music Assistant's player configuration. `ma_preset:<slot>` plays that saved URI through the Music Assistant queue. These local presets do not write anything back to the Bose device or Bose cloud service.
 
+When a physical SoundTouch preset button is pressed on a speaker that belongs to a Music Assistant group, the local preset is routed to the active or configured group player instead of starting unsynced playback on the individual speaker. Duplicate preset events from multiple group members are suppressed briefly so the group receives a single queue command.
+
 The provider opens the SoundTouch websocket notification endpoint with the `gabbo` subprotocol. `nowSelectionUpdated` events expose the physical preset slot, including slots that later fail as `INVALID_SOURCE`, so a hardware preset button can trigger the matching local Music Assistant preset. `volumeUpdated`, `nowPlayingUpdated`, and `presetsUpdated` websocket events schedule immediate state refreshes.
 
 If the physical speaker rewrites a Bose preset while Music Assistant media is active, the provider also treats the changed slot as a signal to save the current Music Assistant media to the matching local slot. Current hardware testing did not show a websocket event for long-presses that do not change the speaker's native preset list.
@@ -96,10 +99,10 @@ SoundTouch zone grouping is not exposed by this first provider version. Grouping
 ## Known Limitations
 
 - The provider still keeps polling enabled as a fallback, but websocket notifications are used for physical preset selection and faster state refreshes.
-- Music Assistant audio playback is delegated to linked protocols such as DLNA. Native SoundTouch Webservices URL playback is intentionally disabled because it is unreliable with MA stream URLs.
+- Music Assistant audio playback is delegated to linked protocols such as DLNA/UPnP or AirPlay/Sendspin. Native SoundTouch Webservices URL playback is intentionally disabled because it is unreliable with MA stream URLs.
 - Source selection is intentionally conservative. Some services require account-specific source account data or a full SoundTouch content item.
 - Hardware preset long-presses are only detected when they mutate the native Bose preset list. No dedicated long-press websocket event was seen during hardware testing.
-- SoundTouch zone grouping is not implemented in this first version.
+- Native SoundTouch zone grouping is not implemented in this first version. Music Assistant group players can be used with linked output protocols, but stability depends on the selected protocol and speaker network quality.
 - The provider was tested against SoundTouch 10 hardware on a local network, but broader model coverage is still needed.
 
 ## Development Notes
@@ -118,7 +121,8 @@ Hardware validation should include:
 
 - one manually configured device
 - one mDNS-discovered device
-- playback of Music Assistant queue content through the linked DLNA/UPnP output
+- playback of Music Assistant queue content through linked output protocols
+- local preset playback on a Music Assistant group that contains two SoundTouch speakers
 - native source detection while AirPlay/Spotify/Bluetooth is active
 - preset selection
 - volume and mute

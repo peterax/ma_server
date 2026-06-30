@@ -200,7 +200,13 @@ class SyncGroupPlayer(Player):
     def source_list(self) -> list[PlayerSource]:
         """Return list of available (native) sources for this player."""
         # NOTE: Not using 'state' here as we need the 'raw' value provided by the sync leader player
-        return self.sync_leader.source_list if self.sync_leader else []
+        if self.sync_leader:
+            return self.sync_leader.source_list
+        for member_id in self._attr_group_members:
+            member_player = self.mass.players.get_player(member_id)
+            if member_player and member_player.state.available and member_player.source_list:
+                return member_player.source_list
+        return []
 
     def _is_member_allowed(self, player_id: str) -> bool:
         """Return whether a player is allowed to join this group given the configured filter."""
@@ -273,7 +279,7 @@ class SyncGroupPlayer(Player):
         }
         possible_players = sorted(
             [
-                ConfigValueOption(x.player_id, title=x.display_name)
+                ConfigValueOption(x.display_name, x.player_id)
                 for x in self.mass.players.all_players(True, False)
                 if x.type != PlayerType.GROUP
                 and (
@@ -292,6 +298,7 @@ class SyncGroupPlayer(Player):
             ConfigEntry(
                 key=CONF_GROUP_MEMBERS,
                 type=ConfigEntryType.STRING,
+                label="Group members",
                 multi_value=True,
                 default_value=[],
                 required=False,  # needed for dynamic members (which allows empty members list)
@@ -300,12 +307,14 @@ class SyncGroupPlayer(Player):
             ConfigEntry(
                 key=CONF_DYNAMIC_GROUP_MEMBERS,
                 type=ConfigEntryType.BOOLEAN,
+                label="Enable dynamic members",
                 default_value=False,
                 required=False,
             ),
             ConfigEntry(
                 key=CONF_ALLOWED_MEMBERS,
                 type=ConfigEntryType.STRING,
+                label="Allowed members",
                 multi_value=True,
                 default_value=[],
                 required=False,
@@ -428,6 +437,16 @@ class SyncGroupPlayer(Player):
                 return
             # Use internal handler to bypass group redirect logic and avoid infinite loop
             await self.mass.players._handle_enqueue_next_media(sync_leader.player_id, media)
+
+    async def select_source(self, source: str) -> None:
+        """Handle source selection on the active sync leader."""
+        await self._form_syncgroup()
+        if sync_leader := self.sync_leader:
+            await self.mass.players._handle_select_source(sync_leader.player_id, source)
+            self._update_attributes()
+            self.update_state()
+            return
+        raise RuntimeError("An empty group cannot select a source, consider adding members first")
 
     async def set_members(  # noqa: PLR0915
         self,

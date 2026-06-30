@@ -24,6 +24,10 @@ PLAYBACK_START_TIMEOUT: Final[float] = 5.0
 CONF_ENTRY_SGP_NOTE = ConfigEntry(
     key="sgp_note",
     type=ConfigEntryType.ALERT,
+    label=(
+        "Sync groups allow you to group compatible players together to play audio in sync. "
+        "Players can only be grouped together if they support the same sync protocol"
+    ),
     required=False,
 )
 
@@ -36,6 +40,7 @@ EXTRA_FEATURES_FROM_MEMBERS: Final[set[PlayerFeature]] = {
     PlayerFeature.VOLUME_SET,
     PlayerFeature.VOLUME_MUTE,
     PlayerFeature.MULTI_DEVICE_DSP,
+    PlayerFeature.SELECT_SOURCE,
 }
 
 
