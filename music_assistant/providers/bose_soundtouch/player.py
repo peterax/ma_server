@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-<<<<<<< HEAD
 from typing import TYPE_CHECKING, ClassVar, cast
 
 import aiohttp
