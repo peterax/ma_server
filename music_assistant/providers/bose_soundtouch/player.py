@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import TYPE_CHECKING, cast
+<<<<<<< HEAD
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import aiohttp
 from music_assistant_models.enums import (
@@ -50,10 +51,13 @@ if TYPE_CHECKING:
 
 IDLE_POLL_INTERVAL = 30
 PLAYBACK_POLL_INTERVAL = 10
+PRESET_DUPLICATE_WINDOW = 2
 
 
 class BoseSoundTouchPlayer(Player):
     """Bose SoundTouch player in Music Assistant."""
+
+    _recent_preset_commands: ClassVar[dict[tuple[str, str], float]] = {}
 
     def __init__(
         self,
@@ -313,11 +317,46 @@ class BoseSoundTouchPlayer(Player):
                 "Preset %s pressed on %s but no media is configured", preset_id, self.name
             )
             return
-        self.logger.info("Preset %s pressed on %s, playing %s", preset_id, self.name, media_id)
+        queue_id = self._get_preset_queue_id()
+        if queue_id != self.player_id:
+            recent_key = (queue_id, media_id)
+            now = time.monotonic()
+            if now - self._recent_preset_commands.get(recent_key, 0) < PRESET_DUPLICATE_WINDOW:
+                self.logger.debug(
+                    "Ignoring duplicate preset %s from %s for group %s",
+                    preset_id,
+                    self.name,
+                    queue_id,
+                )
+                return
+            self._recent_preset_commands[recent_key] = now
+        self.logger.info(
+            "Preset %s pressed on %s, playing %s on %s",
+            preset_id,
+            self.name,
+            media_id,
+            queue_id,
+        )
         try:
-            await self.mass.player_queues.play_media(queue_id=self.player_id, media=media_id)
+            await self.mass.player_queues.play_media(queue_id=queue_id, media=media_id)
         except MusicAssistantError:
             self.logger.exception("Unable to play media for preset %s", preset_id)
+
+    def _get_preset_queue_id(self) -> str:
+        """Return the queue id that should handle a physical preset press."""
+        if active_group := self.state.active_group:
+            return active_group
+        for group_player in self.mass.players.all_players(
+            return_unavailable=False,
+            return_disabled=False,
+        ):
+            if group_player.type != PlayerType.GROUP or group_player.player_id == self.player_id:
+                continue
+            if self.player_id in group_player.state.group_members:
+                return group_player.player_id
+            if self.player_id in group_player.state.static_group_members:
+                return group_player.player_id
+        return self.player_id
 
     async def _refresh_volume(self) -> None:
         """Refresh volume state from the speaker."""

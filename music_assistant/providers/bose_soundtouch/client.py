@@ -276,7 +276,7 @@ def extract_preset_id(message: str) -> int | None:
 
     try:
         return int(preset_id) if preset_id else None
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -294,7 +294,7 @@ def _int_or_none(value: str | None) -> int | None:
         return None
     try:
         return int(value)
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         return None
 
 
