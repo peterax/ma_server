@@ -98,8 +98,11 @@ class BoseSoundTouchPlayer(Player):
         self._attr_device_info.add_identifier(IdentifierType.UUID, info.device_id)
         if info.mac_address:
             self._attr_device_info.add_identifier(IdentifierType.MAC_ADDRESS, info.mac_address)
-        if info.ip_address:
-            self._attr_device_info.add_identifier(IdentifierType.IP_ADDRESS, info.ip_address)
+        # Do not use the control API IP as a protocol-linking identifier.
+        # Some SoundTouch models expose separate control and renderer modules on the same
+        # IP but with different MAC/UUID identities. Linking on IP alone makes the native
+        # player steal a DLNA renderer that works correctly when kept behind its existing
+        # Universal Player wrapper.
         self._stop_event = asyncio.Event()
         self._listener_task: asyncio.Task[None] | None = None
 
@@ -309,14 +312,19 @@ class BoseSoundTouchPlayer(Player):
         """Play the Music Assistant media configured for the given preset button."""
         if preset_id not in PRESET_IDS:
             return
-        # preset buttons are mapped once on the provider, shared by all its speakers
-        media_id = cast("BoseSoundTouchProvider", self.provider).get_preset_media(preset_id)
+        media_key = preset_media_key(preset_id)
+        queue_id = self._get_preset_queue_id()
+        media_id = str(
+            self.mass.config.get_raw_player_config_value(queue_id, media_key)
+            or self.config.get_value(media_key)
+            or self.mass.config.get_raw_player_config_value(self.player_id, media_key)
+            or ""
+        )
         if not media_id:
             self.logger.warning(
                 "Preset %s pressed on %s but no media is configured", preset_id, self.name
             )
             return
-        queue_id = self._get_preset_queue_id()
         if queue_id != self.player_id:
             recent_key = (queue_id, media_id)
             now = time.monotonic()

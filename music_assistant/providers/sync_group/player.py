@@ -21,6 +21,7 @@ from music_assistant.constants import (
 )
 from music_assistant.controllers.players.constants import PlayerLockPurpose
 from music_assistant.models.player import DeviceInfo, Player, PlayerMedia
+from music_assistant.providers.bose_soundtouch.config import build_preset_config_entries
 
 from .constants import (
     CONF_ALLOWED_MEMBERS,
@@ -276,7 +277,7 @@ class SyncGroupPlayer(Player):
         }
         possible_players = sorted(
             [
-                ConfigValueOption(x.player_id, title=x.display_name)
+                ConfigValueOption(title=x.display_name, value=x.player_id)
                 for x in self.mass.players.all_players(True, False)
                 if x.type != PlayerType.GROUP
                 and (
@@ -297,6 +298,7 @@ class SyncGroupPlayer(Player):
             ConfigEntry(
                 key=CONF_GROUP_MEMBERS,
                 type=ConfigEntryType.STRING,
+                label="Group members",
                 multi_value=True,
                 default_value=[],
                 required=False,  # needed for dynamic members (which allows empty members list)
@@ -305,12 +307,14 @@ class SyncGroupPlayer(Player):
             ConfigEntry(
                 key=CONF_DYNAMIC_GROUP_MEMBERS,
                 type=ConfigEntryType.BOOLEAN,
+                label="Dynamic group members",
                 default_value=False,
                 required=False,
             ),
             ConfigEntry(
                 key=CONF_ALLOWED_MEMBERS,
                 type=ConfigEntryType.STRING,
+                label="Allowed members",
                 multi_value=True,
                 default_value=[],
                 required=False,
@@ -319,7 +323,22 @@ class SyncGroupPlayer(Player):
                 advanced=True,
             ),
         ]
+        if self._has_bose_soundtouch_member(saved_ids):
+            entries.extend(await build_preset_config_entries(self.mass, action, values))
         return entries
+
+    def _has_bose_soundtouch_member(self, saved_ids: set[str]) -> bool:
+        """Return whether this group has a Bose SoundTouch member."""
+        member_ids = {
+            *saved_ids,
+            *self._attr_group_members,
+            *self._attr_static_group_members,
+        }
+        for member_id in member_ids:
+            member = self.mass.players.get_player(member_id, False)
+            if member and member.provider.domain == "bose_soundtouch":
+                return True
+        return False
 
     async def power(self, powered: bool) -> None:
         """

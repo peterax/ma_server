@@ -176,6 +176,15 @@ In this scenario, the Denon AVR has three output protocols available. Since the 
 
 For detailed information on protocol linking, output protocol selection, and how devices with multiple protocols are handled, see the [Player Controller README](../../controllers/players/README.md#multi-protocol-player-system).
 
+## Member Provider Configuration
+
+Some member providers expose non-audio configuration that still needs to be
+available when the member is normally used through a sync group. For example,
+Bose SoundTouch players can map physical preset buttons to Music Assistant
+media. If a sync group contains Bose SoundTouch members, the group player also
+shows those preset configuration entries so the preset can target the group
+queue instead of starting only one member out of sync.
+
 ## Group Lifecycle
 
 The group's lifecycle is driven by **power**:
