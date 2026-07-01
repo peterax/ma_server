@@ -139,6 +139,7 @@ async def build_preset_config_entries(
             ConfigEntry(
                 key=f"{PRESET_KEY_PREFIX}{preset_id}_header",
                 type=ConfigEntryType.DIVIDER,
+                label=f"Preset {preset_id}",
                 translation_key="preset_header",
                 translation_params=[str(preset_id)],
                 required=False,
@@ -150,6 +151,8 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=media_type_key,
                     type=ConfigEntryType.STRING,
+                    label=f"Preset {preset_id} media type",
+                    description="Type of media used for this preset's search and playback.",
                     translation_key="preset_media_type",
                     translation_params=[str(preset_id)],
                     required=False,
@@ -160,6 +163,8 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=search_key,
                     type=ConfigEntryType.STRING,
+                    label=f"Preset {preset_id} search",
+                    description="Type a search term, then press Search.",
                     translation_key="preset_search",
                     translation_params=[str(preset_id)],
                     required=False,
@@ -169,6 +174,7 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=f"{PRESET_KEY_PREFIX}{preset_id}_do_search",
                     type=ConfigEntryType.ACTION,
+                    label=f"Search preset {preset_id}",
                     translation_key="preset_search_action",
                     translation_params=[str(preset_id)],
                     action=_preset_search_action(preset_id),
@@ -183,6 +189,7 @@ async def build_preset_config_entries(
                     ConfigEntry(
                         key=selected_key,
                         type=ConfigEntryType.STRING,
+                        label=f"Preset {preset_id} result selection",
                         translation_key="preset_result_selection",
                         translation_params=[str(preset_id)],
                         required=False,
@@ -193,6 +200,7 @@ async def build_preset_config_entries(
                     ConfigEntry(
                         key=f"{PRESET_KEY_PREFIX}{preset_id}_do_select",
                         type=ConfigEntryType.ACTION,
+                        label=f"Select preset {preset_id}",
                         translation_key="preset_select_action",
                         translation_params=[str(preset_id)],
                         action=select_action,
@@ -204,6 +212,8 @@ async def build_preset_config_entries(
             ConfigEntry(
                 key=media_key,
                 type=ConfigEntryType.STRING,
+                label=f"Preset {preset_id} to play",
+                description="URI copied from the selected result or manually entered.",
                 translation_key="preset_media",
                 translation_params=[str(preset_id)],
                 required=False,
