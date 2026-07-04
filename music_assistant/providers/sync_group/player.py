@@ -324,7 +324,14 @@ class SyncGroupPlayer(Player):
             ),
         ]
         if self._has_bose_soundtouch_member(saved_ids):
-            entries.extend(await build_preset_config_entries(self.mass, action, values))
+            entries.extend(
+                await build_preset_config_entries(
+                    self.mass,
+                    self.player_id,
+                    action,
+                    values,
+                )
+            )
         return entries
 
     def _has_bose_soundtouch_member(self, saved_ids: set[str]) -> bool:

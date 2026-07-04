@@ -7,9 +7,11 @@ from defusedxml import ElementTree as DefusedET
 from music_assistant.providers.bose_soundtouch.client import (
     _build_notification_xml,
     _build_zone_xml,
+    _decode_response_body,
     extract_preset_id,
     parse_info,
     parse_now_playing,
+    parse_presets,
     parse_sources,
     parse_volume,
     parse_zone,
@@ -81,6 +83,15 @@ def test_parse_now_playing() -> None:
     assert not play_status_is_paused(now.play_status)
 
 
+def test_decode_response_body_falls_back_to_latin1() -> None:
+    """Bose XML with Latin-1 metadata is decoded without raising."""
+    response = type("Response", (), {"charset": "utf-8"})()
+
+    assert _decode_response_body(response, "<artist>St\xe4ng</artist>".encode("latin-1")) == (
+        "<artist>Stäng</artist>"
+    )
+
+
 def test_parse_now_playing_standby() -> None:
     """A standby snapshot reports the STANDBY source."""
     now = parse_now_playing(
@@ -118,6 +129,21 @@ def test_parse_sources() -> None:
     assert sources[0].name == "AUX IN"
     assert sources[0].ready is True
     assert sources[1].ready is False
+
+
+def test_parse_presets() -> None:
+    """Native preset slots are parsed from the speaker."""
+    presets = parse_presets(
+        DefusedET.fromstring(
+            '<presets deviceID="A">'
+            '<preset id="1"><ContentItem><itemName>P1</itemName></ContentItem></preset>'
+            '<preset id="5"><ContentItem><itemName>Kpop Radio PN</itemName></ContentItem></preset>'
+            "</presets>"
+        )
+    )
+
+    assert [preset.preset_id for preset in presets] == [1, 5]
+    assert [preset.name for preset in presets] == ["P1", "Kpop Radio PN"]
 
 
 def test_parse_zone_master() -> None:

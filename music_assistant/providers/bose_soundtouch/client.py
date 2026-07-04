@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from aiohttp import ClientTimeout
+from aiohttp import ClientResponse, ClientTimeout
 from defusedxml import ElementTree as DefusedET
 
 from .const import API_PORT, BUFFERING_STATE, PAUSE_STATE, PLAY_STATE, REQUEST_TIMEOUT
@@ -67,6 +67,14 @@ class SoundTouchSource:
 
 
 @dataclass
+class SoundTouchPreset:
+    """A native SoundTouch preset slot exposed by the speaker."""
+
+    preset_id: int
+    name: str
+
+
+@dataclass
 class SoundTouchZone:
     """Zone (multiroom) state from the /getZone endpoint."""
 
@@ -115,6 +123,10 @@ class SoundTouchClient:
         """Return the list of sources available on the speaker."""
         return parse_sources(await self._get("sources"))
 
+    async def get_presets(self) -> list[SoundTouchPreset]:
+        """Return the native preset slots configured on the speaker."""
+        return parse_presets(await self._get("presets"))
+
     async def select_source(self, source: str, source_account: str | None = None) -> None:
         """Select a source on the speaker."""
         account = f' sourceAccount="{source_account}"' if source_account else ""
@@ -155,11 +167,16 @@ class SoundTouchClient:
         url = f"http://{self.ip_address}:{API_PORT}/{path}"
         async with self._session.get(url, timeout=_TIMEOUT) as resp:
             resp.raise_for_status()
-            return _parse_xml(await resp.text())
+            return _parse_xml(_decode_response_body(resp, await resp.read()))
 
     async def _post(self, path: str, body: str) -> None:
         url = f"http://{self.ip_address}:{API_PORT}/{path}"
-        async with self._session.post(url, data=body, timeout=_TIMEOUT) as resp:
+        async with self._session.post(
+            url,
+            data=body,
+            headers={"Content-Type": "application/xml", "Accept": "application/xml"},
+            timeout=_TIMEOUT,
+        ) as resp:
             resp.raise_for_status()
 
 
@@ -237,6 +254,19 @@ def parse_sources(root: Element) -> list[SoundTouchSource]:
     return sources
 
 
+def parse_presets(root: Element) -> list[SoundTouchPreset]:
+    """Parse a /presets response into native preset slots."""
+    presets: list[SoundTouchPreset] = []
+    for item in root.findall("preset"):
+        preset_id = _int_or_none(item.attrib.get("id"))
+        if preset_id is None:
+            continue
+        content_item = item.find("ContentItem")
+        name = content_item.findtext("itemName") if content_item is not None else None
+        presets.append(SoundTouchPreset(preset_id=preset_id, name=name or f"Preset {preset_id}"))
+    return presets
+
+
 def parse_zone(root: Element) -> SoundTouchZone:
     """Parse a /getZone response into a SoundTouchZone."""
     master_id = root.attrib.get("master")
@@ -282,6 +312,15 @@ def extract_preset_id(message: str) -> int | None:
 
 def _parse_xml(payload: str) -> Element:
     return cast("Element", DefusedET.fromstring(payload))
+
+
+def _decode_response_body(resp: ClientResponse, body: bytes) -> str:
+    """Decode a Bose XML response body."""
+    encoding = resp.charset or "utf-8"
+    try:
+        return body.decode(encoding)
+    except (LookupError, UnicodeDecodeError):
+        return body.decode("latin-1")
 
 
 def _local_name(tag: str) -> str:
