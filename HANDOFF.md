@@ -3,7 +3,8 @@
 ## Current Branch
 
 - Branch: `bose-soundtouch-group-presets`
-- Upstream comparison at handoff time: `origin/dev` is 51 commits ahead, this branch is 4 commits ahead.
+- Upstream comparison after 2026-07-07 rebase: branch is based on `origin/dev`
+  `128ab66f7` and is 5 commits ahead.
 - Existing remote for the user's fork: `fork git@github.com:peterax/ma_server.git`
 
 ## What Is Implemented
@@ -102,7 +103,7 @@ Project instructions require `pre-commit run --all-files` after changes, so this
 
 ## Known Risks / Next Work
 
-- Rebase onto latest `origin/dev`; this branch is behind by 51 commits.
+- Branch was rebased onto `origin/dev` on 2026-07-07. Re-check upstream before PR updates.
 - Add automatic SoundTouch-to-DLNA linking/migration so runtime settings do not need manual linking after config churn.
 - Decide whether the local `.container-overrides` changes are still required or should be removed from the test container after upstream catches up.
 - Ensure `.ma-data/` is ignored or kept out of any git add operation. This environment could not write `.git/info/exclude` because `.git` was read-only.
