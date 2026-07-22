@@ -31,7 +31,7 @@ from .const import PRESET_IDS
 if TYPE_CHECKING:
     from music_assistant_models.config_entries import ConfigValueType
     from music_assistant_models.media_items import SearchResults
-    from music_assistant_models.player_queue import QueueItem
+    from music_assistant_models.queue_item import QueueItem
 
     from music_assistant.mass import MusicAssistant
 
@@ -106,20 +106,21 @@ async def build_preset_config_entries(
             current_item := _get_current_queue_item(mass, player_id)
         ):
             if current_media := current_item.media_item:
-                media_value = current_media.uri
-                media_label = _format_media_label(
-                    current_media.name,
-                    current_media.media_type.value,
-                    current_media.provider,
-                )
-                media_type = (
-                    current_media.media_type
-                    if current_media.media_type in SEARCHABLE_MEDIA_TYPES
-                    else media_type
-                )
-                values[media_type_key] = media_type.value
-                values[media_key] = media_value
-                values[media_label_key] = media_label
+                if current_media.uri:
+                    media_value = current_media.uri
+                    media_label = _format_media_label(
+                        current_media.name,
+                        current_media.media_type.value,
+                        current_media.provider,
+                    )
+                    media_type = (
+                        current_media.media_type
+                        if current_media.media_type in SEARCHABLE_MEDIA_TYPES
+                        else media_type
+                    )
+                    values[media_type_key] = media_type.value
+                    values[media_key] = media_value
+                    values[media_label_key] = media_label
 
         media_options = await _build_preset_media_options(
             mass=mass,
@@ -139,7 +140,6 @@ async def build_preset_config_entries(
             ConfigEntry(
                 key=f"preset_{preset_id}_header",
                 type=ConfigEntryType.DIVIDER,
-                label=f"Preset {preset_id}",
                 translation_key="preset_header",
                 translation_params=[str(preset_id)],
                 required=False,
@@ -151,22 +151,14 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=f"preset_{preset_id}_save_current_button",
                     type=ConfigEntryType.ACTION,
-                    label=f"Save current as preset {preset_id}",
-                    description=(
-                        "Copy the currently playing queue item to this preset. "
-                        "Save the player settings afterwards to persist it."
-                    ),
                     translation_key="preset_save_current_action",
                     translation_params=[str(preset_id)],
                     action=save_current_action,
-                    action_label=f"Save current as preset {preset_id}",
                     category="presets",
                 ),
                 ConfigEntry(
                     key=media_type_key,
                     type=ConfigEntryType.STRING,
-                    label=f"Preset {preset_id} media type",
-                    description="Type of media used for this preset's search and playback.",
                     translation_key="preset_media_type",
                     translation_params=[str(preset_id)],
                     required=False,
@@ -178,8 +170,6 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=search_key,
                     type=ConfigEntryType.STRING,
-                    label=f"Preset {preset_id} search",
-                    description="Type a search term, then press Search.",
                     translation_key="preset_search",
                     translation_params=[str(preset_id)],
                     required=False,
@@ -190,11 +180,9 @@ async def build_preset_config_entries(
                 ConfigEntry(
                     key=f"preset_{preset_id}_do_search",
                     type=ConfigEntryType.ACTION,
-                    label=f"Search preset {preset_id}",
                     translation_key="preset_search_action",
                     translation_params=[str(preset_id)],
                     action=search_action,
-                    action_label=f"Search preset {preset_id}",
                     category="presets",
                 ),
             )
@@ -206,7 +194,6 @@ async def build_preset_config_entries(
                     ConfigEntry(
                         key=selected_key,
                         type=ConfigEntryType.STRING,
-                        label=f"Preset {preset_id} result selection",
                         translation_key="preset_result_selection",
                         translation_params=[str(preset_id)],
                         required=False,
@@ -218,11 +205,9 @@ async def build_preset_config_entries(
                     ConfigEntry(
                         key=copy_action,
                         type=ConfigEntryType.ACTION,
-                        label=f"Select preset {preset_id}",
                         translation_key="preset_select_action",
                         translation_params=[str(preset_id)],
                         action=copy_action,
-                        action_label=f"Select preset {preset_id}",
                         category="presets",
                     ),
                 )
@@ -231,8 +216,6 @@ async def build_preset_config_entries(
             ConfigEntry(
                 key=media_key,
                 type=ConfigEntryType.STRING,
-                label=f"Preset {preset_id} to play",
-                description="Media copied from the current queue, selected search result, or URI.",
                 translation_key="preset_media",
                 translation_params=[str(preset_id)],
                 required=False,
@@ -246,7 +229,8 @@ async def build_preset_config_entries(
             ConfigEntry(
                 key=media_label_key,
                 type=ConfigEntryType.STRING,
-                label=f"Preset {preset_id} selected media",
+                translation_key="preset_media_label",
+                translation_params=[str(preset_id)],
                 required=False,
                 default_value=media_label,
                 value=media_label,
@@ -312,7 +296,7 @@ async def _search_media_items(
             ),
             timeout=SEARCH_TIMEOUT,
         )
-    except (MusicAssistantError, TimeoutError):
+    except MusicAssistantError, TimeoutError:
         return []
     return _iter_search_result_items(search_result, media_type)
 

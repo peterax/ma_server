@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -21,7 +22,7 @@ def _player(
     raw_media_id: str | None = None,
 ) -> BoseSoundTouchPlayer:
     player = BoseSoundTouchPlayer.__new__(BoseSoundTouchPlayer)
-    player.mass = SimpleNamespace(
+    player.mass = SimpleNamespace(  # type: ignore[assignment]
         config=SimpleNamespace(
             get_raw_player_config_value=MagicMock(
                 side_effect=lambda _player_id, key: (
@@ -35,12 +36,12 @@ def _player(
     player.logger = MagicMock()
     player._player_id = player_id
     player._attr_name = "Bose"
-    player._config = SimpleNamespace(
+    player._config = SimpleNamespace(  # type: ignore[assignment]
         get_value=MagicMock(
             side_effect=lambda key: media_id if key == preset_media_key(1) else None
         )
     )
-    player._state = SimpleNamespace(active_group=active_group)
+    player._state = SimpleNamespace(active_group=active_group)  # type: ignore[assignment]
     return player
 
 
@@ -88,7 +89,7 @@ async def test_handle_preset_suppresses_duplicate_group_events() -> None:
     await player._handle_preset(1)
     await player._handle_preset(1)
 
-    player.mass.player_queues.play_media.assert_awaited_once_with(
+    cast("AsyncMock", player.mass.player_queues.play_media).assert_awaited_once_with(
         queue_id="syncgroup_office",
         media="library://radio/1",
     )
@@ -101,7 +102,7 @@ async def test_handle_preset_falls_back_to_raw_player_config() -> None:
 
     await player._handle_preset(1)
 
-    player.mass.player_queues.play_media.assert_awaited_once_with(
+    cast("AsyncMock", player.mass.player_queues.play_media).assert_awaited_once_with(
         queue_id="bose_soundtouch_member",
         media="library://radio/2",
     )

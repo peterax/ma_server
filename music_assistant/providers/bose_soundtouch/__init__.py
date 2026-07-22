@@ -56,7 +56,6 @@ async def get_config_entries(
         ConfigEntry(
             key=CONF_APP_KEY,
             type=ConfigEntryType.SECURE_STRING,
-            label="Bose developer app key",
             translation_key="app_key",
             required=False,
         ),

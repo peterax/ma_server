@@ -36,7 +36,15 @@
     },
     "preset_media": {
       "label": "Preset {0} to play",
-      "description": "URI copied from the selected result or manually entered. Pressing this preset button on any of your SoundTouch speakers plays it on that speaker."
+      "description": "Media copied from the current queue, selected search result, or URI. Pressing this preset button on any of your SoundTouch speakers plays it on that speaker."
+    },
+    "preset_save_current_action": {
+      "label": "Save current as preset {0}",
+      "description": "Copy the currently playing queue item to this preset. Save the player settings afterwards to persist it.",
+      "action_label": "Save current as preset {0}"
+    },
+    "preset_media_label": {
+      "label": "Preset {0} selected media"
     }
   },
   "manifest": {

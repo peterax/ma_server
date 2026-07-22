@@ -306,7 +306,7 @@ def extract_preset_id(message: str) -> int | None:
 
     try:
         return int(preset_id) if preset_id else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -319,7 +319,7 @@ def _decode_response_body(resp: ClientResponse, body: bytes) -> str:
     encoding = resp.charset or "utf-8"
     try:
         return body.decode(encoding)
-    except (LookupError, UnicodeDecodeError):
+    except LookupError, UnicodeDecodeError:
         return body.decode("latin-1")
 
 
@@ -333,7 +333,7 @@ def _int_or_none(value: str | None) -> int | None:
         return None
     try:
         return int(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
