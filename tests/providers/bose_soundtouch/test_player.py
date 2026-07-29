@@ -7,8 +7,10 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from music_assistant_models.enums import PlayerType
+from music_assistant_models.enums import IdentifierType, PlayerType
 
+from music_assistant.models.player import DeviceInfo
+from music_assistant.providers.bose_soundtouch.client import SoundTouchClient
 from music_assistant.providers.bose_soundtouch.config import preset_media_key
 from music_assistant.providers.bose_soundtouch.player import BoseSoundTouchPlayer
 
@@ -78,6 +80,17 @@ def test_preset_queue_uses_configured_group_member() -> None:
     )
 
     assert player._get_preset_queue_id() == "syncgroup_office"
+
+
+def test_update_ip_address_keeps_initial_ip_identifier() -> None:
+    """The initial SoundTouch IP is available for protocol matching."""
+    player = BoseSoundTouchPlayer.__new__(BoseSoundTouchPlayer)
+    player._client = cast("SoundTouchClient", SimpleNamespace(ip_address="192.0.2.10"))
+    player._attr_device_info = DeviceInfo(model="Bose", manufacturer="Bose")
+
+    player.update_ip_address("192.0.2.10")
+
+    assert player.device_info.identifiers[IdentifierType.IP_ADDRESS] == "192.0.2.10"
 
 
 @pytest.mark.asyncio

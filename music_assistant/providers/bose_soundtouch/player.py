@@ -101,11 +101,10 @@ class BoseSoundTouchPlayer(Player):
         self._attr_device_info.add_identifier(IdentifierType.UUID, info.device_id)
         if info.mac_address:
             self._attr_device_info.add_identifier(IdentifierType.MAC_ADDRESS, info.mac_address)
-        # Do not use the control API IP as a protocol-linking identifier.
-        # Some SoundTouch models expose separate control and renderer modules on the same
-        # IP but with different MAC/UUID identities. Linking on IP alone makes the native
-        # player steal a DLNA renderer that works correctly when kept behind its existing
-        # Universal Player wrapper.
+        if info.ip_address:
+            self._attr_device_info.add_identifier(IdentifierType.IP_ADDRESS, info.ip_address)
+        # The protocol matcher only uses IP as a fallback when at least one player is a
+        # protocol player, which allows matching the SoundTouch control API to its renderer.
         self._stop_event = asyncio.Event()
         self._listener_task: asyncio.Task[None] | None = None
 
@@ -258,6 +257,7 @@ class BoseSoundTouchPlayer(Player):
     def update_ip_address(self, ip_address: str) -> None:
         """Update the speaker's IP address after a (re)discovery."""
         if ip_address == self._client.ip_address:
+            self._attr_device_info.add_identifier(IdentifierType.IP_ADDRESS, ip_address)
             return
         self.logger.debug("Address updated to %s for player %s", ip_address, self.name)
         self._client.ip_address = ip_address
