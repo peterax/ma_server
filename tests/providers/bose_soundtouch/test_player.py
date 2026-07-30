@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from music_assistant_models.enums import IdentifierType, PlayerType
@@ -30,7 +30,8 @@ def _player(
                 side_effect=lambda _player_id, key: (
                     raw_media_id if key == preset_media_key(1) else None
                 )
-            )
+            ),
+            set_raw_player_config_value=MagicMock(),
         ),
         players=SimpleNamespace(all_players=MagicMock(return_value=groups or [])),
         player_queues=SimpleNamespace(play_media=AsyncMock()),
@@ -129,16 +130,29 @@ async def test_handle_config_action_renders_preset_action() -> None:
         "dict[str, Any]", {preset_media_key(1): SimpleNamespace(value="library://radio/1")}
     )
 
+    async def render_entries(
+        _mass: object, _player_id: str, _action: str, values: dict[str, Any]
+    ) -> list[Any]:
+        values.update(
+            {
+                "preset_1_media": "library://radio/1",
+                "preset_1_media_type": "radio",
+                "preset_1_media_label": "Morning Radio",
+            }
+        )
+        return []
+
     with patch(
         "music_assistant.providers.bose_soundtouch.player.build_preset_config_entries",
-        new_callable=AsyncMock,
-        return_value=[],
+        side_effect=render_entries,
     ) as build_entries:
         assert await player.handle_config_action("preset_1_save_current") == []
 
-    build_entries.assert_awaited_once_with(
-        player.mass,
-        "bose_soundtouch_member",
-        "preset_1_save_current",
-        {preset_media_key(1): "library://radio/1"},
-    )
+    mock_build_entries = cast("AsyncMock", build_entries)
+    assert mock_build_entries.await_count == 1
+    config = cast("MagicMock", player.mass.config)
+    assert config.set_raw_player_config_value.call_args_list == [
+        call("bose_soundtouch_member", "preset_1_media", "library://radio/1"),
+        call("bose_soundtouch_member", "preset_1_media_type", "radio"),
+        call("bose_soundtouch_member", "preset_1_media_label", "Morning Radio"),
+    ]

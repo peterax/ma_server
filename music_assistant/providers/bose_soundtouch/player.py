@@ -28,7 +28,12 @@ from .client import (
     play_status_is_paused,
     play_status_is_playing,
 )
-from .config import build_preset_config_entries, preset_media_key
+from .config import (
+    build_preset_config_entries,
+    preset_media_key,
+    preset_media_label_key,
+    preset_media_type_key,
+)
 from .const import (
     CONF_APP_KEY,
     KEY_MUTE,
@@ -168,7 +173,18 @@ class BoseSoundTouchPlayer(Player):
         if not action.startswith("preset_"):
             return await super().handle_config_action(action)
         values = {key: entry.value for key, entry in self.config.values.items()}
-        return await build_preset_config_entries(self.mass, self.player_id, action, values)
+        entries = await build_preset_config_entries(self.mass, self.player_id, action, values)
+        if action.endswith("_save_current"):
+            preset_id = action.removeprefix("preset_").removesuffix("_save_current")
+            for key in (
+                preset_media_key(int(preset_id)),
+                preset_media_type_key(int(preset_id)),
+                preset_media_label_key(int(preset_id)),
+            ):
+                if key in values:
+                    self.mass.config.set_raw_player_config_value(self.player_id, key, values[key])
+            self.logger.info("Saved current media as Bose preset %s on %s", preset_id, self.name)
+        return entries
 
     # --- Player commands ---
 
