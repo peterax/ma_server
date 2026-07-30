@@ -3,9 +3,8 @@
 ## Current Branch
 
 - Branch: `bose-soundtouch-group-presets`
-- Latest pushed commit: `dd8ec7e723d89c4791885fcc9395c80bab791f7d`
-- Upstream comparison after 2026-07-07 rebase: branch is based on `origin/dev`
-  `128ab66f7` and is 5 commits ahead.
+- Branch is rebased onto upstream `dev` at `adbb927cf` and contains the SoundTouch
+  feature commits on top.
 - Existing remote for the user's fork: `fork git@github.com:peterax/ma_server.git`
 
 ## What Is Implemented
@@ -88,7 +87,8 @@ Registered Bose SoundTouch player: BossR (172.25.25.116)
 - Fixed invalid Python 3 exception syntax in local SoundTouch config changes before committing.
 - Fixed initial SoundTouch IP registration so fresh installations can auto-link the
   matching DLNA renderer instead of showing separate native and DLNA players.
-- Pushed the fix to `peterax/ma_server` on `bose-soundtouch-group-presets`.
+- The feature branch is rebased onto the latest upstream `dev` to keep the bundled
+  AirPlay server code aligned with the development App image.
 
 ## Validation
 
@@ -103,14 +103,17 @@ python3 -m py_compile \
   tests/providers/bose_soundtouch/test_client.py
 ```
 
-The full pre-commit suite passes after provisioning `uv` and `pre-commit`:
+Ruff and the repository formatting/configuration hooks pass after provisioning
+`uv` and `pre-commit`:
 
 ```bash
 pre-commit run --all-files
 ```
 
 The full pytest suite was not run in this checkout because the project virtualenv
-was not provisioned. For complete local validation, run:
+was not provisioned. Full mypy currently reports unrelated upstream errors in
+AirPlay and Yandex files; the rebased SoundTouch and sync-group files pass targeted
+syntax, Ruff, and mypy checks. For complete local validation, run:
 
 ```bash
 scripts/setup.sh
@@ -128,6 +131,6 @@ The local runtime files remain intentionally untracked:
 
 ## Known Risks / Next Work
 
-- Branch was rebased onto `origin/dev` on 2026-07-07. Re-check upstream before PR updates.
+- Re-check upstream before PR updates.
 - Decide whether the local `.container-overrides` changes are still required or should be removed from the test container after upstream catches up.
 - Run the full test suite in the intended development environment before opening/updating a PR.

@@ -321,11 +321,12 @@ class SyncGroupPlayer(Player):
             ),
         ]
         if self._has_bose_soundtouch_member(saved_ids):
+            values = {key: entry.value for key, entry in self.config.values.items()}
             entries.extend(
                 await build_preset_config_entries(
                     self.mass,
                     self.player_id,
-                    action,
+                    None,
                     values,
                 )
             )

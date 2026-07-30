@@ -21,8 +21,7 @@ from .const import CONF_APP_KEY
 from .provider import BoseSoundTouchProvider
 
 if TYPE_CHECKING:
-    from music_assistant_models.config_entries import ConfigValueType
-    from music_assistant_models.config_entries import ProviderConfig
+    from music_assistant_models.config_entries import ConfigValueType, ProviderConfig
     from music_assistant_models.provider import ProviderManifest
 
     from music_assistant.mass import MusicAssistant
@@ -38,6 +37,8 @@ async def setup(
 ) -> ProviderInstanceType:
     """Initialize provider(instance) with given configuration."""
     return BoseSoundTouchProvider(mass, manifest, config, SUPPORTED_FEATURES)
+
+
 async def get_config_entries(
     mass: MusicAssistant,  # noqa: ARG001
     instance_id: str | None = None,  # noqa: ARG001
