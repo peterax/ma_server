@@ -5,6 +5,7 @@
 - Branch: `bose-soundtouch-group-presets`
 - Branch is rebased onto upstream `dev` at `adbb927cf` and contains the SoundTouch
   feature commits on top.
+- Latest pushed commit: `cb1167c9c` (`Fix Bose preset action identifiers`).
 - Existing remote for the user's fork: `fork git@github.com:peterax/ma_server.git`
 
 ## What Is Implemented
@@ -25,26 +26,23 @@
   matching DLNA renderer is linked automatically on a fresh installation.
 - When AirPlay and DLNA are both linked, set `Preferred Output Protocol` to DLNA
   on the native SoundTouch player if AirPlay is unavailable or unreliable.
+- Empty Bose manual-discovery configuration no longer crashes provider startup.
+- Stale Universal Player wrappers are removed when their protocol is linked to a native
+  Bose player, preventing duplicates such as `BossR - Echoing`.
+- Preset save/search/select actions use their action IDs, and saving the current item
+  immediately persists the preset media, type, and label.
 
 ## Runtime Test Setup
 
-Music Assistant is running in Docker:
+Docker is no longer used for this branch. The local development server was run with
+Python 3.14.6 and system FFmpeg 6.1.1:
 
 ```text
-container: ma-soundtouch-test
-image: ghcr.io/music-assistant/server:latest
-network: host
+command: python -m music_assistant --log-level debug
 web: http://172.25.24.117:8095
-data mount: /root/server/.ma-data -> /data
-```
-
-Mounted local code overrides:
-
-```text
-/root/server/music_assistant/providers/bose_soundtouch
-/root/server/music_assistant/providers/sync_group/player.py
-/root/server/.container-overrides/music_assistant/providers/dlna/player.py
-/root/server/.container-overrides/music_assistant/controllers/config.py
+streamserver: port 8097
+virtualenv: /root/server/.venv
+data: /root/server/.ma-data
 ```
 
 Important: `.ma-data/`, `.container-overrides/`, and `.ssh-codex/` are local runtime files and should not be committed.
@@ -89,6 +87,10 @@ Registered Bose SoundTouch player: BossR (172.25.25.116)
   matching DLNA renderer instead of showing separate native and DLNA players.
 - The feature branch is rebased onto the latest upstream `dev` to keep the bundled
   AirPlay server code aligned with the development App image.
+- Fixed Bose provider startup when `manual_discovery_ip_addresses` is unset.
+- Restored per-player preset mappings by removing the migration that deleted them.
+- Added Bose config-action handling and immediate persistence for `Save current as preset N`.
+- Corrected preset action entry keys so the UI routes save/search/select actions correctly.
 
 ## Validation
 
@@ -103,17 +105,16 @@ python3 -m py_compile \
   tests/providers/bose_soundtouch/test_client.py
 ```
 
-Ruff and the repository formatting/configuration hooks pass after provisioning
-`uv` and `pre-commit`:
+Targeted Bose and migration tests pass (47 tests), and the full repository
+formatting/configuration hooks pass after provisioning `uv` and `pre-commit`:
 
 ```bash
 pre-commit run --all-files
 ```
 
-The full pytest suite was not run in this checkout because the project virtualenv
-was not provisioned. Full mypy currently reports unrelated upstream errors in
-AirPlay and Yandex files; the rebased SoundTouch and sync-group files pass targeted
-syntax, Ruff, and mypy checks. For complete local validation, run:
+The full pytest suite was not run because unrelated environment-dependent tests
+require additional system libraries and network sockets. Targeted tests, Ruff,
+formatting, and mypy pass. For complete local validation, run:
 
 ```bash
 scripts/setup.sh
@@ -132,5 +133,6 @@ The local runtime files remain intentionally untracked:
 ## Known Risks / Next Work
 
 - Re-check upstream before PR updates.
-- Decide whether the local `.container-overrides` changes are still required or should be removed from the test container after upstream catches up.
 - Run the full test suite in the intended development environment before opening/updating a PR.
+- The backend preset action works and persists immediately, but the current frontend
+  does not refresh the displayed form value until the page is refreshed.
