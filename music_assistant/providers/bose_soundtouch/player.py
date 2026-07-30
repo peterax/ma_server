@@ -163,6 +163,13 @@ class BoseSoundTouchPlayer(Player):
             values,
         )
 
+    async def handle_config_action(self, action: str) -> list[ConfigEntry]:
+        """Handle a preset configuration action and re-render the player settings."""
+        if not action.startswith("preset_"):
+            return await super().handle_config_action(action)
+        values = {key: entry.value for key, entry in self.config.values.items()}
+        return await build_preset_config_entries(self.mass, self.player_id, action, values)
+
     # --- Player commands ---
 
     async def power(self, powered: bool) -> None:

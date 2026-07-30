@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from music_assistant_models.enums import IdentifierType, PlayerType
@@ -118,4 +118,27 @@ async def test_handle_preset_falls_back_to_raw_player_config() -> None:
     cast("AsyncMock", player.mass.player_queues.play_media).assert_awaited_once_with(
         queue_id="bose_soundtouch_member",
         media="library://radio/2",
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_config_action_renders_preset_action() -> None:
+    """Preset actions are handled by the Bose player instead of the generic fallback."""
+    player = _player()
+    player._config.values = cast(
+        "dict[str, Any]", {preset_media_key(1): SimpleNamespace(value="library://radio/1")}
+    )
+
+    with patch(
+        "music_assistant.providers.bose_soundtouch.player.build_preset_config_entries",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as build_entries:
+        assert await player.handle_config_action("preset_1_save_current") == []
+
+    build_entries.assert_awaited_once_with(
+        player.mass,
+        "bose_soundtouch_member",
+        "preset_1_save_current",
+        {preset_media_key(1): "library://radio/1"},
     )
