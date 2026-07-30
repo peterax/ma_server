@@ -1418,4 +1418,11 @@ class SyncGroupPlayer(Player):
             member = self.mass.players.get_player(member_id, False)
             if member and member.provider.domain == "bose_soundtouch":
                 return True
+            if (
+                member
+                and member.protocol_parent_id
+                and (parent := self.mass.players.get_player(member.protocol_parent_id, False))
+                and parent.provider.domain == "bose_soundtouch"
+            ):
+                return True
         return False
