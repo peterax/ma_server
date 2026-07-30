@@ -59,6 +59,12 @@ async def test_build_preset_entries_without_values() -> None:
     for preset_id in range(1, 7):
         assert entries[preset_media_key(preset_id)].type == ConfigEntryType.STRING
         assert entries[preset_media_type_key(preset_id)].default_value == MediaType.PLAYLIST.value
+        assert entries[f"preset_{preset_id}_save_current"].action == (
+            f"preset_{preset_id}_save_current"
+        )
+        assert entries[f"preset_{preset_id}_search_media"].action == (
+            f"preset_{preset_id}_search_media"
+        )
     assert mass.searches == []
 
 

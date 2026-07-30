@@ -149,7 +149,7 @@ async def build_preset_config_entries(
         entries.extend(
             (
                 ConfigEntry(
-                    key=f"preset_{preset_id}_save_current_button",
+                    key=save_current_action,
                     type=ConfigEntryType.ACTION,
                     translation_key="preset_save_current_action",
                     translation_params=[str(preset_id)],
@@ -178,7 +178,7 @@ async def build_preset_config_entries(
                     category="presets",
                 ),
                 ConfigEntry(
-                    key=f"preset_{preset_id}_do_search",
+                    key=search_action,
                     type=ConfigEntryType.ACTION,
                     translation_key="preset_search_action",
                     translation_params=[str(preset_id)],
