@@ -3,6 +3,7 @@
 ## Current Branch
 
 - Branch: `bose-soundtouch-group-presets`
+- Latest pushed commit: `dd8ec7e723d89c4791885fcc9395c80bab791f7d`
 - Upstream comparison after 2026-07-07 rebase: branch is based on `origin/dev`
   `128ab66f7` and is 5 commits ahead.
 - Existing remote for the user's fork: `fork git@github.com:peterax/ma_server.git`
@@ -21,6 +22,10 @@
   - Latin-1 fallback decode for Bose XML responses;
   - "Save current as preset N" actions in player/group config;
   - read-only preset selected-media labels.
+- SoundTouch players expose their initial IP address for protocol matching, so the
+  matching DLNA renderer is linked automatically on a fresh installation.
+- When AirPlay and DLNA are both linked, set `Preferred Output Protocol` to DLNA
+  on the native SoundTouch player if AirPlay is unavailable or unreliable.
 
 ## Runtime Test Setup
 
@@ -64,6 +69,9 @@ The native SoundTouch provider intentionally does not expose `PLAY_MEDIA`; arbit
 - Physical preset websocket events arrive through the SoundTouch websocket using protocol `gabbo`.
 - Preset buttons can trigger MA media playback.
 - Presets 1, 2, and 6 were tested by the user.
+- Uterum, BossL, and BossR are discovered as native SoundTouch players with their
+  protocol players linked; playback uses the selected output protocol while preset
+  controls remain on the native SoundTouch player.
 - User reported: "Works like a charm!" for websocket button/volume handling.
 - After the persistent data migration and Latin-1 decode fix, logs showed:
 
@@ -78,6 +86,9 @@ Registered Bose SoundTouch player: BossR (172.25.25.116)
 - Moved MA test data from volatile `/tmp/ma-soundtouch-data` to persistent `/root/server/.ma-data`.
 - Fixed a startup crash where `Uterum` returned `/now_playing` XML containing Latin-1 metadata and aiohttp tried to decode it as UTF-8.
 - Fixed invalid Python 3 exception syntax in local SoundTouch config changes before committing.
+- Fixed initial SoundTouch IP registration so fresh installations can auto-link the
+  matching DLNA renderer instead of showing separate native and DLNA players.
+- Pushed the fix to `peterax/ma_server` on `bose-soundtouch-group-presets`.
 
 ## Validation
 
@@ -92,19 +103,31 @@ python3 -m py_compile \
   tests/providers/bose_soundtouch/test_client.py
 ```
 
-Could not run:
+The full pre-commit suite passes after provisioning `uv` and `pre-commit`:
 
-```text
-pytest: command not found
-pre-commit: command not found
+```bash
+pre-commit run --all-files
 ```
 
-Project instructions require `pre-commit run --all-files` after changes, so this should be run in a fully provisioned environment before opening/updating a PR.
+The full pytest suite was not run in this checkout because the project virtualenv
+was not provisioned. For complete local validation, run:
+
+```bash
+scripts/setup.sh
+pytest
+pre-commit run --all-files
+```
+
+The local runtime files remain intentionally untracked:
+
+```text
+.container-overrides/
+.ma-data/
+.ssh-codex/
+```
 
 ## Known Risks / Next Work
 
 - Branch was rebased onto `origin/dev` on 2026-07-07. Re-check upstream before PR updates.
-- Add automatic SoundTouch-to-DLNA linking/migration so runtime settings do not need manual linking after config churn.
 - Decide whether the local `.container-overrides` changes are still required or should be removed from the test container after upstream catches up.
-- Ensure `.ma-data/` is ignored or kept out of any git add operation. This environment could not write `.git/info/exclude` because `.git` was read-only.
-- Run the full test suite/pre-commit in the intended development environment.
+- Run the full test suite in the intended development environment before opening/updating a PR.
