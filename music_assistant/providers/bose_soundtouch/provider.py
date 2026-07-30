@@ -24,7 +24,9 @@ class BoseSoundTouchProvider(PlayerProvider):
 
     async def loaded_in_mass(self) -> None:
         """Call after the provider has been loaded."""
-        manual_ips = cast("list[str]", self.config.get_value(CONF_ENTRY_MANUAL_DISCOVERY_IPS.key))
+        manual_ips = cast(
+            "list[str]", self.config.get_value(CONF_ENTRY_MANUAL_DISCOVERY_IPS.key) or []
+        )
         for ip_address in manual_ips:
             if stripped := ip_address.strip():
                 await self.try_add_player(stripped)
