@@ -21,6 +21,8 @@ from music_assistant.constants import (
 )
 from music_assistant.controllers.players.constants import PlayerLockPurpose
 from music_assistant.models.player import DeviceInfo, Player, PlayerMedia
+from music_assistant.providers.bose_soundtouch.config import preset_media_key
+from music_assistant.providers.bose_soundtouch.const import PRESET_IDS
 
 from .constants import (
     CONF_ALLOWED_MEMBERS,
@@ -321,6 +323,22 @@ class SyncGroupPlayer(Player):
                 advanced=True,
             ),
         ]
+        if bose_member := self._get_bose_soundtouch_member(saved_ids):
+            entries.extend(
+                ConfigEntry(
+                    key=preset_media_key(preset_id),
+                    type=ConfigEntryType.STRING,
+                    translation_key="preset_media",
+                    translation_params=[str(preset_id)],
+                    translation_owner=bose_member.translation_owner,
+                    required=False,
+                    default_value="",
+                    value=self.get_config_value(preset_media_key(preset_id), ""),
+                    category="presets",
+                    category_translation_key="presets",
+                )
+                for preset_id in PRESET_IDS
+            )
         return entries
 
     async def power(self, powered: bool) -> None:
@@ -1439,6 +1457,26 @@ class SyncGroupPlayer(Player):
             if self._reform_task is asyncio.current_task():
                 self._reform_task = None
                 self.update_state()
+
+    def _get_bose_soundtouch_member(self, saved_ids: set[str]) -> Player | None:
+        """Return a Bose SoundTouch member or protocol parent for this group."""
+        member_ids = {
+            *saved_ids,
+            *self._attr_group_members,
+            *self._attr_static_group_members,
+        }
+        for member_id in member_ids:
+            if not (member := self.mass.players.get_player(member_id)):
+                continue
+            if member.provider.domain == "bose_soundtouch":
+                return member
+            if (
+                member.protocol_parent_id
+                and (parent := self.mass.players.get_player(member.protocol_parent_id))
+                and parent.provider.domain == "bose_soundtouch"
+            ):
+                return parent
+        return None
 
     def _resolve_session_target(self, player: Player, domain: str | None) -> Player | None:
         """

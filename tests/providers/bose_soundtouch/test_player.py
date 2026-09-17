@@ -19,6 +19,7 @@ def _player(
     active_group: str | None = None,
     synced_to: str | None = None,
     groups: list[SimpleNamespace] | None = None,
+    group_media_id: str | None = None,
 ) -> BoseSoundTouchPlayer:
     """Create the minimum SoundTouch player needed for preset tests."""
     player = BoseSoundTouchPlayer.__new__(BoseSoundTouchPlayer)
@@ -34,6 +35,7 @@ def _player(
         else []
     )
     player.mass = SimpleNamespace(  # type: ignore[assignment]
+        config=SimpleNamespace(get_raw_player_config_value=MagicMock(return_value=group_media_id)),
         players=SimpleNamespace(
             all_players=MagicMock(return_value=groups or []),
             iter_players=MagicMock(return_value=synced_players),
@@ -109,4 +111,21 @@ async def test_handle_preset_suppresses_duplicate_group_events() -> None:
     cast("AsyncMock", player.mass.player_queues.play_media).assert_awaited_once_with(
         queue_id="syncgroup_office",
         media="library://radio/1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_preset_prefers_group_mapping() -> None:
+    """A group-specific preset mapping overrides the provider-wide mapping."""
+    player = _player(
+        active_group="syncgroup_office",
+        group_media_id="library://radio/group",
+    )
+    BoseSoundTouchPlayer._recent_preset_commands.clear()
+
+    await player._handle_preset(1)
+
+    cast("AsyncMock", player.mass.player_queues.play_media).assert_awaited_once_with(
+        queue_id="syncgroup_office",
+        media="library://radio/group",
     )

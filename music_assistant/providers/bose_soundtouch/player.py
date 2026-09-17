@@ -36,6 +36,7 @@ from music_assistant.providers.bose_soundtouch.avt_helpers import avt_play, avt_
 
 from .client.schema.enums import Key, PlayStatus, SourceStatus
 from .client.schema.models import Info, NowPlaying, Zone, ZoneMember
+from .config import preset_media_key
 from .const import (
     ACTION_OVERWRITE_PRESET_1,
     ACTION_OVERWRITE_PRESET_2,
@@ -468,14 +469,17 @@ class BoseSoundTouchPlayer(Player):
         """Play the Music Assistant media configured for the given preset button."""
         if preset_id not in PRESET_IDS:
             return
-        # preset buttons are mapped once on the provider, shared by all its speakers
-        media_id = cast("BoseSoundTouchProvider", self.provider).get_preset_media(preset_id)
+        queue_id = self._get_preset_queue_id()
+        media_id = str(
+            self.mass.config.get_raw_player_config_value(queue_id, preset_media_key(preset_id))
+            or cast("BoseSoundTouchProvider", self.provider).get_preset_media(preset_id)
+            or ""
+        )
         if not media_id:
             self.logger.warning(
                 "Preset %s pressed on %s but no media is configured", preset_id, self.name
             )
             return
-        queue_id = self._get_preset_queue_id()
         if queue_id != self.player_id:
             recent_key = (queue_id, media_id)
             now = time.monotonic()

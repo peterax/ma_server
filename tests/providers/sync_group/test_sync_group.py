@@ -1541,6 +1541,34 @@ class TestGetConfigEntriesMemberPicker:
     """Test the member options offered in the group settings dropdown."""
 
     @pytest.mark.asyncio
+    async def test_bose_group_exposes_preset_overrides(self) -> None:
+        """A group containing SoundTouch members exposes six preset URI overrides."""
+        mass = _make_mock_mass()
+        bose = _make_mock_player("bose", provider_domain="bose_soundtouch")
+        bose.type = PlayerType.PLAYER
+        bose.translation_owner = "provider.bose_soundtouch"
+        mass.players.all_players = MagicMock(return_value=[bose])
+        mass.players.get_player = _player_lookup({"bose": bose})
+        sgp = _make_sync_group(mass)
+
+        with patch.object(
+            sgp.config,
+            "get_value",
+            side_effect=lambda key, default=None: (
+                ["bose"] if key == CONF_GROUP_MEMBERS else default
+            ),
+        ):
+            entries = await sgp.get_config_entries()
+        preset_entries = [entry for entry in entries if entry.key.startswith("preset_")]
+
+        assert [entry.key for entry in preset_entries] == [
+            f"preset_{preset_id}_media" for preset_id in range(1, 7)
+        ]
+        assert all(
+            entry.translation_owner == "provider.bose_soundtouch" for entry in preset_entries
+        )
+
+    @pytest.mark.asyncio
     async def test_slaved_follower_is_still_offered(self) -> None:
         """
         A synced follower must stay selectable in the member dropdown.
